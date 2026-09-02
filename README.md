@@ -1,60 +1,88 @@
-# Real-time multiplayer arena
+# Run Lobby — platformer lobby + runs, accounts, chat
 
-A minimal but complete real-time multiplayer game. Every connected player is a
-circle that moves around a shared world; everyone sees everyone else move live.
-The server is authoritative (it owns the game state), clients just send key
-input and draw snapshots. Built to deploy on Render's free tier.
+A side-scrolling multiplayer platformer with momentum-based movement, a walkable
+lobby, doors that drop you into shared **run** instances with friends, per-room
+chat, rebindable controls, and a **secure account system**. Server-authoritative,
+built to deploy on Render's free tier with a free Neon Postgres database.
 
 ```
-server.js          Node + Express + ws. Serves the client AND runs the game loop.
-public/index.html  The whole client: canvas renderer, input, auto-reconnect.
-package.json       start script + node engine, so Render knows how to run it.
+server.js          Express routes + authenticated WebSocket upgrade
+auth.js            Register/login/logout, argon2id hashing, sessions, rate limiting
+db.js              Postgres pool + schema
+game.js            Physics, rooms, doors, run instances, chat (the game loop)
+public/index.html  Auth screen, canvas, HUD, chat, controls + run-browser overlays
+public/game.js     Client: auth, WebSocket, rendering, rebindable input, chat
 ```
 
-## Run it locally
+## 1. Set up the database (Neon — free, persistent)
+
+1. Go to https://neon.tech and sign up (free, no card).
+2. Create a new project. Neon makes a Postgres database for you.
+3. On the project dashboard, find **Connection string** and copy it. It looks like
+   `postgresql://user:password@ep-xxx.aws.neon.tech/dbname?sslmode=require`.
+4. Keep it handy — it's your `DATABASE_URL`. The app creates its own tables on
+   first start, so there's nothing else to configure.
+
+## 2. Run locally (optional)
 
 ```bash
 npm install
-npm start
+DATABASE_URL="postgresql://...your neon string..." npm start
 ```
 
-Open http://localhost:3000 in two browser tabs (or two devices on your network)
-and move with **WASD** / arrow keys. You'll see both players in each tab.
+Open http://localhost:3000, create an account, and you're in the lobby. Open a
+second browser (or an incognito window) to test multiplayer with a second account.
 
-## Deploy to Render (free)
+## 3. Deploy to Render
 
-1. Push this folder to a **GitHub** repo (do not commit `node_modules` — the
-   included `.gitignore` handles that).
-2. Go to https://render.com → **New** → **Web Service** → connect your repo.
-3. Render auto-detects Node. Confirm these settings:
+1. Push this folder to a **GitHub** repo (the `.gitignore` keeps `node_modules`
+   and `.env` out).
+2. Render → **New** → **Web Service** → connect the repo.
+3. Settings:
    - **Build Command:** `npm install`
    - **Start Command:** `npm start`
    - **Instance Type:** **Free**
-4. Click **Create Web Service**. In ~2 minutes you get a URL like
-   `https://your-game.onrender.com` — share it and play.
+4. Open the **Environment** section and add one variable:
+   - Key `DATABASE_URL`, value = your Neon connection string.
+5. **Create Web Service.** First build takes a couple minutes; when the log shows
+   `Database ready.` then `Server listening`, open your `*.onrender.com` URL.
 
-You don't need to set a PORT variable. Render injects `PORT` automatically and
-`server.js` reads it. WebSockets work over the same URL because the client picks
-`wss://` automatically when the page is served over HTTPS.
+Cold-start note still applies: the free web service sleeps after ~15 min idle. Use
+the cron-job.org ping (every 10 min) from before to keep it warm. Your accounts
+live in Neon, so they persist across sleeps, restarts, and redeploys.
 
-## The one free-tier gotcha: cold starts
+## Controls
 
-Render's free tier spins the server down after ~15 minutes of no traffic. The
-next visitor then waits 30–60 seconds for it to wake — rough for a real-time
-game. Two options:
+Arrow keys move · **Space** jump · **A** interact (doors) · **Enter** chat ·
+**Esc** settings. Every key is rebindable in the Controls menu and saved in your
+browser. Slots for **Shoot (D)**, **Secondary (S)**, and **Inventory (Tab)** are
+already present and rebindable — they just don't do anything yet.
 
-- **Keep it warm:** create a free cron job at https://cron-job.org that GETs
-  your Render URL every ~10 minutes.
-- **Upgrade later:** if the game gets real use, a small always-on box (Render's
-  paid starter, or a ~€4/mo Hetzner VPS) removes cold starts entirely.
+## How the security works (the account system)
+
+- **Passwords**: hashed with **argon2id** (memory-hard; OWASP-recommended
+  defaults `m=19456, t=2, p=1`). Plaintext is never stored or logged.
+- **Sessions**: a 256-bit random token in an **httpOnly + Secure + SameSite=Lax**
+  cookie. The database stores only the token's **SHA-256**, so a DB leak can't be
+  replayed into live logins. Sessions expire after 7 days and are swept hourly.
+- **No username enumeration**: login always runs a hash verify (against a dummy
+  hash if the user doesn't exist) and returns one generic error, so timing and
+  wording don't reveal which usernames exist.
+- **Rate limiting**: register and login are throttled per IP.
+- **Injection-safe**: every query is parameterized. Chat and names are rendered
+  with `textContent`, never `innerHTML`, so messages can't inject markup.
+- **Authoritative server**: clients send key intent only; the server owns all
+  positions, so players can't teleport or move faster by editing the client.
+
+If you later add a custom domain or email flows, the two things to add next are a
+CSRF token on the JSON POSTs (SameSite=Lax already covers the common cases) and
+email verification.
 
 ## Where to take it next
 
-This scaffold is the foundation for most real-time games. Common next steps:
-
-- **Add game rules** in the server loop (collisions, scoring, items, health).
-- **Client-side interpolation** so movement looks buttery between the 30 Hz
-  snapshots (lerp each player toward its latest server position).
-- **Rooms / lobbies** so players are grouped instead of all in one world.
-- **Swap `ws` for socket.io** if you want built-in rooms and reconnection
-  handling out of the box.
+- **Run content**: enemies, objectives, loot, a boss — this is the natural next
+  build. The run rooms and instancing already exist; the gameplay goes in `game.js`.
+- **Combat wiring**: the Shoot/Secondary/Inventory binds are ready to hook up.
+- **Procedural runs**: replace `runLevel()` with a generator.
+- **Smoothing**: the client already interpolates; add server reconciliation if you
+  want client-side prediction for zero-latency local movement.
