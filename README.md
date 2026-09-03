@@ -9,9 +9,10 @@ built to deploy on Render's free tier with a free Neon Postgres database.
 server.js          Express routes + authenticated WebSocket upgrade
 auth.js            Register/login/logout, argon2id hashing, sessions, rate limiting
 db.js              Postgres pool + schema
-game.js            Physics, rooms, doors, run instances, chat (the game loop)
+game.js            Authoritative sim, rooms, doors, run instances, chat, bullets
+public/physics.js  SHARED deterministic physics (required by server, loaded by client)
 public/index.html  Auth screen, canvas, HUD, chat, controls + run-browser overlays
-public/game.js     Client: auth, WebSocket, rendering, rebindable input, chat
+public/game.js     Client: auth, prediction/reconciliation, rendering, input, chat
 ```
 
 ## 1. Set up the database (Neon — free, persistent)
@@ -53,10 +54,11 @@ live in Neon, so they persist across sleeps, restarts, and redeploys.
 
 ## Controls
 
-Arrow keys move · **Space** jump · **A** interact (doors) · **Enter** chat ·
-**Esc** settings. Every key is rebindable in the Controls menu and saved in your
-browser. Slots for **Shoot (D)**, **Secondary (S)**, and **Inventory (Tab)** are
-already present and rebindable — they just don't do anything yet.
+Arrow keys move · **Space** jump · **A** interact (doors) · **D** or **left-click**
+shoot · **Enter** chat · **Esc** settings. Aim with the mouse — the character's gun
+arm and shots follow the cursor. Every key is rebindable in the Controls menu and
+saved in your browser. Slots for **Secondary (S)** and **Inventory (Tab)** are
+present and rebindable, reserved for later.
 
 ## How the security works (the account system)
 
@@ -71,8 +73,11 @@ already present and rebindable — they just don't do anything yet.
 - **Rate limiting**: register and login are throttled per IP.
 - **Injection-safe**: every query is parameterized. Chat and names are rendered
   with `textContent`, never `innerHTML`, so messages can't inject markup.
-- **Authoritative server**: clients send key intent only; the server owns all
-  positions, so players can't teleport or move faster by editing the client.
+- **Authoritative server + client prediction**: the client predicts its own
+  movement instantly (so it feels lag-free) using the SAME deterministic physics
+  as the server, then reconciles against the server's authoritative snapshots.
+  The server still owns every position and validates shots, so a hacked client
+  can't teleport, move faster, or fire faster than the cooldown allows.
 
 If you later add a custom domain or email flows, the two things to add next are a
 CSRF token on the JSON POSTs (SameSite=Lax already covers the common cases) and
@@ -80,9 +85,9 @@ email verification.
 
 ## Where to take it next
 
-- **Run content**: enemies, objectives, loot, a boss — this is the natural next
-  build. The run rooms and instancing already exist; the gameplay goes in `game.js`.
-- **Combat wiring**: the Shoot/Secondary/Inventory binds are ready to hook up.
+- **Enemies + health/damage**: bullets currently fly and despawn on terrain. Give
+  players/enemies health and make bullets deal damage — the projectile loop in
+  `game.js` (`simulate()`) is where hit detection goes.
+- **Run content**: objectives, loot, a boss. Instancing already exists.
+- **Secondary + inventory**: those binds are ready to wire up.
 - **Procedural runs**: replace `runLevel()` with a generator.
-- **Smoothing**: the client already interpolates; add server reconciliation if you
-  want client-side prediction for zero-latency local movement.
