@@ -3,163 +3,137 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>Arena</title>
+<title>Void Runs</title>
 <style>
-  :root { color-scheme: dark; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: #0b0f17; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  canvas { display: block; }
+  :root {
+    color-scheme: dark;
+    --pit:#171c1a; --pit-lit:#1f2624; --stone:#2c3531; --stone-lit:#455049;
+    --bone:#ede6d2; --sulfur:#d6c63c; --rust:#c0562e; --ember:#9e2b45;
+    --mint:#7fc4a8; --dim:#7c8079;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; overflow:hidden; background:var(--pit); color:var(--bone);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  canvas { display:block; cursor:none; background:var(--pit); }
+  button { font:inherit; cursor:pointer; }
+  .hidden { display:none !important; }
 
-  #hud {
-    position: fixed; top: 14px; left: 14px; z-index: 10;
-    display: flex; gap: 10px; align-items: center;
-    color: #cdd6e4; font-size: 13px; user-select: none;
-  }
-  #dot {
-    width: 9px; height: 9px; border-radius: 50%;
-    background: #f59e0b; box-shadow: 0 0 8px #f59e0b;
-    transition: background .2s, box-shadow .2s;
-  }
-  #dot.on  { background: #10b981; box-shadow: 0 0 8px #10b981; }
-  #dot.off { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+  #auth { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(900px 500px at 50% -5%, var(--pit-lit) 0%, var(--pit) 60%); }
+  .card { width:360px; max-width:calc(100vw - 32px); background:var(--stone);
+    border-left:3px solid var(--sulfur); border-radius:4px; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .card h1 { font-size:22px; letter-spacing:3px; color:var(--bone); margin-bottom:2px; }
+  .card p.sub { color:var(--dim); font-size:12px; margin-bottom:18px; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; }
+  .tabs button { flex:1; padding:8px; border-radius:3px; border:none; background:var(--pit-lit); color:var(--dim); }
+  .tabs button.active { background:var(--sulfur); color:var(--pit); }
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:11px; color:var(--dim); margin-bottom:6px; letter-spacing:1px; }
+  .field input { width:100%; padding:10px 12px; border-radius:3px; background:var(--pit); border:1px solid var(--stone-lit); color:var(--bone); font:inherit; }
+  .field input:focus { outline:none; border-color:var(--sulfur); }
+  .primary { width:100%; padding:11px; border:none; border-radius:3px; background:var(--sulfur); color:var(--pit); margin-top:4px; letter-spacing:1px; }
+  .primary:hover { background:var(--bone); }
+  .msg { min-height:16px; font-size:12px; color:var(--ember); margin-top:10px; }
+  .hint { font-size:11px; color:var(--dim); margin-top:12px; line-height:1.5; }
 
-  #namebar {
-    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-    z-index: 10; display: flex; gap: 8px;
-    background: rgba(17,24,39,.85); padding: 8px; border-radius: 10px;
-    border: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(6px);
-  }
-  #namebar input {
-    background: #0b0f17; border: 1px solid rgba(255,255,255,.12);
-    color: #e5e7eb; padding: 7px 10px; border-radius: 7px; font: inherit; width: 150px;
-  }
-  #namebar button {
-    background: #3b82f6; color: white; border: none;
-    padding: 7px 14px; border-radius: 7px; font: inherit; cursor: pointer;
-  }
-  #namebar button:hover { background: #2563eb; }
+  #hud { position:fixed; top:12px; left:14px; z-index:20; display:flex; gap:12px; align-items:center; user-select:none; }
+  #hearts { display:flex; gap:4px; }
+  #hearts .h { width:14px; height:14px; background:var(--ember); clip-path:polygon(50% 100%,0 38%,20% 0,50% 22%,80% 0,100% 38%); }
+  #hearts .h.off { background:var(--stone-lit); }
+  #dot { width:9px; height:9px; border-radius:50%; background:var(--ember); box-shadow:0 0 8px currentColor; color:var(--ember); }
+  #dot.on { background:var(--mint); color:var(--mint); }
+  #stat { color:var(--dim); font-size:13px; }
+  #topright { position:fixed; top:12px; right:14px; z-index:20; display:flex; gap:8px; }
+  #topright button { padding:6px 12px; border-radius:3px; border:none; background:var(--stone); color:var(--bone); }
+  #topright button:hover { background:var(--stone-lit); }
+  #wave { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:20; color:var(--sulfur); letter-spacing:2px; font-size:14px; user-select:none; }
 
-  #hint {
-    position: fixed; top: 14px; right: 14px; z-index: 10;
-    color: #6b7280; font-size: 12px; text-align: right; line-height: 1.6; user-select: none;
-  }
-  kbd {
-    background: #1f2937; border: 1px solid rgba(255,255,255,.1);
-    border-radius: 4px; padding: 1px 6px; color: #cdd6e4;
-  }
+  #bossbar { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:20; width:min(520px,70vw); display:none; }
+  #bossbar .name { font-size:11px; letter-spacing:2px; color:var(--bone); margin-bottom:4px; text-align:center; }
+  #bossbar .track { height:8px; background:var(--pit-lit); border:1px solid var(--stone-lit); }
+  #bossbar .fill { height:100%; background:var(--ember); width:100%; }
+
+  #prompt { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); z-index:20;
+    background:var(--stone); border-left:3px solid var(--sulfur); border-radius:3px; padding:8px 14px; font-size:13px; user-select:none; }
+  #prompt kbd { background:var(--pit); border:1px solid var(--stone-lit); border-radius:3px; padding:1px 7px; margin:0 2px; }
+
+  #chat { position:fixed; bottom:12px; left:12px; z-index:20; width:340px; max-width:56vw; }
+  #chatlog { display:flex; flex-direction:column; gap:3px; max-height:150px; overflow-y:auto; padding:8px; margin-bottom:6px;
+    font-size:12.5px; line-height:1.4; background:rgba(23,28,26,.6); border-left:2px solid var(--stone-lit); }
+  #chatlog:empty { display:none; }
+  #chatlog .name { font-weight:700; }
+  #chatlog .sys { color:var(--dim); font-style:italic; }
+  #chatform { display:flex; gap:6px; }
+  #chatform.hidden { display:none; }
+  #chatinput { flex:1; padding:8px 10px; border-radius:3px; background:var(--pit); border:1px solid var(--stone-lit); color:var(--bone); font:inherit; }
+  #chatinput:focus { outline:none; border-color:var(--sulfur); }
+
+  .overlay { position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; background:rgba(10,12,11,.72); }
+  .modal { width:460px; max-width:calc(100vw - 32px); max-height:82vh; overflow-y:auto; background:var(--stone); border-left:3px solid var(--sulfur); border-radius:4px; padding:22px; }
+  .modal h2 { font-size:16px; letter-spacing:2px; margin-bottom:14px; display:flex; justify-content:space-between; }
+  .modal h2 button { background:none; border:none; color:var(--dim); font-size:18px; }
+  .modal h3 { font-size:11px; letter-spacing:2px; color:var(--dim); margin:16px 0 8px; }
+  .bindrow, .runrow { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--pit-lit); border-radius:3px; margin-bottom:6px; }
+  .bindrow .soon { color:var(--dim); font-size:11px; }
+  .keybtn { min-width:110px; padding:6px 10px; border-radius:3px; border:1px solid var(--stone-lit); background:var(--pit); color:var(--bone); text-align:center; }
+  .keybtn.listening { border-color:var(--sulfur); color:var(--sulfur); }
+  .skins { display:flex; gap:8px; flex-wrap:wrap; }
+  .skin { width:54px; height:38px; border-radius:3px; border:2px solid transparent; cursor:pointer; display:flex; flex-direction:column; overflow:hidden; }
+  .skin.sel { border-color:var(--sulfur); }
+  .skin span { flex:1; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--pit-lit); border-radius:3px; }
+  .toggle button { padding:5px 12px; border-radius:3px; border:none; background:var(--stone-lit); color:var(--bone); }
+  .toggle button.on { background:var(--mint); color:var(--pit); }
+  .runrow .meta { color:var(--dim); font-size:12px; }
+  .runrow button, .modal .primary.small { width:auto; padding:6px 14px; margin:0; }
+  .createbar { display:flex; gap:8px; margin-top:8px; }
+  .empty { color:var(--dim); font-size:13px; padding:10px 2px; }
 </style>
 </head>
 <body>
-  <div id="hud"><span id="dot" class="off"></span><span id="status">connecting…</span></div>
-  <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrow keys to move</div>
-  <div id="namebar">
-    <input id="name" placeholder="your name" maxlength="16" />
-    <button id="setname">set</button>
+  <div id="auth">
+    <div class="card">
+      <h1>VOID RUNS</h1>
+      <p class="sub">Sign in to enter the hollow.</p>
+      <div class="tabs"><button id="tabLogin" class="active">Log in</button><button id="tabRegister">Create account</button></div>
+      <div class="field"><label>USERNAME</label><input id="u" autocomplete="username" maxlength="20" /></div>
+      <div class="field"><label>PASSWORD</label><input id="pw" type="password" autocomplete="current-password" maxlength="200" /></div>
+      <button id="submit" class="primary">LOG IN</button>
+      <div id="authmsg" class="msg"></div>
+      <div class="hint" id="authhint"></div>
+    </div>
   </div>
-  <canvas id="c"></canvas>
 
-<script>
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-const statusEl = document.getElementById('status');
-const dotEl = document.getElementById('dot');
+  <div id="game" class="hidden">
+    <canvas id="c"></canvas>
+    <div id="hud"><span id="dot"></span><div id="hearts"></div><span id="stat"></span></div>
+    <div id="wave"></div>
+    <div id="topright"><button id="btnControls">Options</button><button id="btnLogout">Log out</button></div>
+    <div id="prompt" class="hidden"></div>
+    <div id="bossbar"><div class="name" id="bossname"></div><div class="track"><div class="fill" id="bossfill"></div></div></div>
+    <div id="chat"><div id="chatlog"></div><form id="chatform" class="hidden" autocomplete="off"><input id="chatinput" maxlength="200" placeholder="say something…" /></form></div>
+  </div>
 
-let W = 0, H = 0;
-function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
-addEventListener('resize', resize); resize();
+  <div id="controls" class="overlay hidden">
+    <div class="modal">
+      <h2>OPTIONS <button id="closeControls">×</button></h2>
+      <h3>SKIN</h3><div id="skinlist" class="skins"></div>
+      <h3>MOUSE AIM</h3>
+      <div class="toggle"><span>Aim with the mouse</span><button id="toggleMouse">OFF</button></div>
+      <h3>CONTROLS</h3><div id="bindlist"></div>
+      <button id="resetBinds" class="primary small" style="margin-top:8px;">Reset to defaults</button>
+    </div>
+  </div>
 
-let myId = null;
-let world = { width: 1600, height: 1600 };
-let state = { players: [] };
-const input = { up: false, down: false, left: false, right: false };
+  <div id="runs" class="overlay hidden">
+    <div class="modal">
+      <h2>RUNS <button id="closeRuns">×</button></h2>
+      <div id="runlist"></div>
+      <div class="createbar"><button id="createRun" class="primary small">Create a run</button><button id="refreshRuns" class="keybtn">Refresh</button></div>
+    </div>
+  </div>
 
-// --- Networking ---
-// Derive ws:// vs wss:// from the page protocol so the SAME file works
-// locally (http -> ws) and on Render (https -> wss). This is the #1 thing
-// people get wrong when deploying.
-let ws;
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}`);
-
-  ws.onopen = () => { setStatus('connected', 'on'); };
-  ws.onclose = () => { setStatus('reconnecting…', 'off'); setTimeout(connect, 1000); };
-  ws.onerror = () => ws.close();
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'welcome') { myId = msg.id; world = msg.world; }
-    else if (msg.type === 'state') { state = msg; }
-  };
-}
-function setStatus(text, cls) { statusEl.textContent = text; dotEl.className = cls; }
-connect();
-
-// --- Input ---
-const KEYS = {
-  KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
-  KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
-};
-function sendInput() {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', input }));
-}
-addEventListener('keydown', (e) => {
-  if (document.activeElement.tagName === 'INPUT') return;
-  const dir = KEYS[e.code]; if (!dir) return;
-  e.preventDefault();
-  if (!input[dir]) { input[dir] = true; sendInput(); }
-});
-addEventListener('keyup', (e) => {
-  const dir = KEYS[e.code]; if (!dir) return;
-  if (input[dir]) { input[dir] = false; sendInput(); }
-});
-
-document.getElementById('setname').onclick = () => {
-  const name = document.getElementById('name').value.trim();
-  if (name && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'name', name }));
-  document.getElementById('name').blur();
-};
-
-// --- Render loop ---
-// The client never simulates movement; it just draws whatever the server's
-// last snapshot said. Simple and cheat-resistant. (You'd add interpolation
-// here later for extra smoothness.)
-function draw() {
-  ctx.fillStyle = '#0b0f17';
-  ctx.fillRect(0, 0, W, H);
-
-  const me = state.players.find((p) => p.id === myId);
-  const camX = me ? me.x - W / 2 : world.width / 2 - W / 2;
-  const camY = me ? me.y - H / 2 : world.height / 2 - H / 2;
-
-  // grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  const grid = 80;
-  for (let x = -camX % grid; x < W; x += grid) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = -camY % grid; y < H; y += grid) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-  // world border
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-camX, -camY, world.width, world.height);
-
-  // players
-  for (const p of state.players) {
-    const x = p.x - camX, y = p.y - camY;
-    ctx.beginPath();
-    ctx.arc(x, y, 22, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.fill();
-    if (p.id === myId) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke(); }
-    ctx.fillStyle = '#e5e7eb';
-    ctx.font = '13px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(p.name, x, y - 30);
-  }
-
-  requestAnimationFrame(draw);
-}
-draw();
-</script>
+  <script src="physics.js"></script>
+  <script src="game.js"></script>
 </body>
 </html>
