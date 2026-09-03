@@ -139,7 +139,10 @@ function computeAim(){ // returns normalized aim in game space
   if(ax===0&&ay===0){ ax=self?self.face:1; } else if(ay<0&&ax===0){ ax=self?self.face:1; }
   const l=Math.hypot(ax,ay)||1; return {x:ax/l,y:ay/l};
 }
-function sendInput(){ if(!ws||!connected)return; const b=uiBlocking(); const mask=((!b&&held.left)?1:0)|((!b&&held.right)?2:0)|((!b&&held.jump)?4:0)|((!b&&held.aimDown)?8:0); ws.send(JSON.stringify({type:'input',seq:++inputSeq,k:mask})); pending.push({seq:inputSeq,input:{left:!b&&held.left,right:!b&&held.right,jump:!b&&held.jump,down:!b&&held.aimDown}}); if(pending.length>200)pending.shift(); if(self&&level&&!dashActive)Physics.step(self,pending[pending.length-1].input,level); }
+// Sampled every tick by a fixed 60Hz loop (see startGame): reads currently-held
+// keys, predicts locally, and streams the input to the server. Sending every
+// tick (not just on key events) is what keeps gravity/momentum advancing.
+function sendInput(){ if(!ws||!connected||!self||!level)return; const b=uiBlocking(); const mask=((!b&&held.left)?1:0)|((!b&&held.right)?2:0)|((!b&&held.jump)?4:0)|((!b&&held.aimDown)?8:0); const input={left:!b&&held.left,right:!b&&held.right,jump:!b&&held.jump,down:!b&&held.aimDown}; ws.send(JSON.stringify({type:'input',seq:++inputSeq,k:mask})); pending.push({seq:inputSeq,input}); if(pending.length>200)pending.shift(); if(!dashActive)Physics.step(self,input,level); }
 function sendFire(down){ if(ws&&connected)ws.send(JSON.stringify({type:'fire',down:!!down})); }
 function sendAim(){ if(!ws||!connected)return; const a=computeAim(); if(Math.abs(a.x-lastAim.x)>0.02||Math.abs(a.y-lastAim.y)>0.02){ lastAim=a; ws.send(JSON.stringify({type:'aim',x:a.x,y:a.y})); } }
 
@@ -153,20 +156,20 @@ window.addEventListener('keydown',(e)=>{
     case 'settings': $('controls').classList.contains('hidden')?openControls():closeControls(); break;
     case 'chat': if(!chatOpen())openChat(); break;
     case 'aimMode': mouseAim=!mouseAim; localStorage.setItem('vs_mouse',mouseAim?'1':'0'); break;
-    case 'left': held.left=true; sendInput(); break;
-    case 'right': held.right=true; sendInput(); break;
-    case 'jump': held.jump=true; sendInput(); break;
+    case 'left': held.left=true; break;
+    case 'right': held.right=true; break;
+    case 'jump': held.jump=true; break;
     case 'aimUp': held.aimUp=true; break;
-    case 'aimDown': held.aimDown=true; sendInput(); break;
+    case 'aimDown': held.aimDown=true; break;
     case 'fire': if(!firing){firing=true; sendFire(true);} break;
     case 'dash': if(ws&&connected)ws.send(JSON.stringify({type:'dash'})); break;
     case 'interact': if(ws&&connected)ws.send(JSON.stringify({type:'interact'})); break;
   }
 });
 window.addEventListener('keyup',(e)=>{ const a=CODE2ACTION[e.code]; if(!a)return;
-  if(a==='left'){held.left=false;sendInput();} else if(a==='right'){held.right=false;sendInput();}
-  else if(a==='jump'){held.jump=false;sendInput();} else if(a==='aimUp'){held.aimUp=false;}
-  else if(a==='aimDown'){held.aimDown=false;sendInput();} else if(a==='fire'){firing=false;sendFire(false);} });
+  if(a==='left'){held.left=false;} else if(a==='right'){held.right=false;}
+  else if(a==='jump'){held.jump=false;} else if(a==='aimUp'){held.aimUp=false;}
+  else if(a==='aimDown'){held.aimDown=false;} else if(a==='fire'){firing=false;sendFire(false);} });
 
 const canvas=$('c'); const ctx=canvas.getContext('2d');
 canvas.addEventListener('mousemove',e=>{ const r=canvas.getBoundingClientRect(); const sx=(e.clientX-r.left-ox)/scale, sy=(e.clientY-r.top-oy)/scale; mouse.x=sx; mouse.y=sy; });
@@ -263,4 +266,4 @@ function draw(){
   requestAnimationFrame(draw);
 }
 
-function startGame(username){ $('auth').classList.add('hidden'); $('game').classList.remove('hidden'); connect(); draw(); }
+function startGame(username){ $('auth').classList.add('hidden'); $('game').classList.remove('hidden'); connect(); setInterval(sendInput, 1000/60); draw(); }
