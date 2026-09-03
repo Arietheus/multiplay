@@ -1,81 +1,83 @@
-// Shared, deterministic, fixed-timestep platformer physics.
+// Shared, deterministic physics — ported from Void Shell's per-frame model so
+// the feel is identical. Runs on the server (require) and client (script tag);
+// client-side prediction depends on both computing the same result.
 //
-// This SAME file runs on the server (require) and in the browser (script tag).
-// Client-side prediction only works if both sides compute identical results
-// for the same inputs, so there must be exactly one copy of this logic. Every
-// value is integer-tick or fixed-DT based (no wall-clock) to stay deterministic.
+// Void Shell values (per 60fps frame): GRAVITY 0.48, JUMP_V -9, friction
+// .75 ground / .92 air, runMax 3.6, runAccel 0.85, coyote/buffer 7, one-way
+// ledges (only `solid` platforms block and stop bullets).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Physics = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  const DT = 1 / 60;                 // fixed simulation step
-  const GRAV = 2200;
-  const MOVE_ACCEL = 7000, AIR_ACCEL = 4200;
-  const MAX_RUN = 340, FRICTION = 4200;
-  const JUMP_VEL = -780, JUMP_CUTOFF = 0.45, MAX_FALL = 1500;
-  const COYOTE_TICKS = 6, BUFFER_TICKS = 7;
-  const PW = 26, PH = 38;
+  const W = 760, H = 440, FLOOR_TOP = 416;
+  const GRAVITY = 0.48, MAX_FALL = 12;
+  const FRICTION_GROUND = 0.75, FRICTION_AIR = 0.92;
+  const JUMP_V = -9, HOP_V = -9;
+  const RUN_MAX = 3.6, RUN_ACCEL = 0.85;
+  const COYOTE = 7, BUFFER = 7, JUMPS = 1;
+  const PW = 15, PH = 21;
 
-  const overlap = (ax, ay, aw, ah, b) =>
-    ax < b.x + b.w && ax + aw > b.x && ay < b.y + b.h && ay + ah > b.y;
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const hit = (s, b) => s.x < b.x + b.w && s.x + PW > b.x && s.y < b.y + b.h && s.y + PH > b.y;
 
-  // Fresh movement state at a spawn point.
   function newState(spawn) {
     return { x: spawn.x, y: spawn.y, vx: 0, vy: 0,
-      grounded: false, coyote: 0, buffer: 0, pjump: false, facing: 1 };
+      onGround: false, coyote: 0, jumps: JUMPS, face: 1,
+      dropThru: 0, buffer: 0, pjump: false };
   }
 
-  // Advance ONE state by ONE tick given a held-input snapshot. Mutates s.
-  // input = { left, right, jump }; level = { platforms, width, height, spawn }.
+  // input = { left, right, jump, down }; level = { platforms, width, height, spawn }
   function step(s, input, level) {
     const plats = level.platforms;
 
-    if (input.jump && !s.pjump) s.buffer = BUFFER_TICKS;      // jump pressed
-    if (!input.jump && s.pjump && s.vy < 0) s.vy *= JUMP_CUTOFF; // released early
+    if (input.jump && !s.pjump) s.buffer = BUFFER;
     s.pjump = input.jump;
     if (s.buffer > 0) s.buffer--;
+    if (s.dropThru > 0) s.dropThru--;
 
-    const dir = (input.left && !input.right) ? -1 : (input.right && !input.left) ? 1 : 0;
-    const accel = s.grounded ? MOVE_ACCEL : AIR_ACCEL;
-    if (dir !== 0) {
-      s.vx += dir * accel * DT;
-      if (s.vx > MAX_RUN) s.vx = MAX_RUN;
-      if (s.vx < -MAX_RUN) s.vx = -MAX_RUN;
-      s.facing = dir;
-    } else if (s.grounded) {
-      if (s.vx > 0) s.vx = Math.max(0, s.vx - FRICTION * DT);
-      else if (s.vx < 0) s.vx = Math.min(0, s.vx + FRICTION * DT);
+    const ix = (input.left && !input.right) ? -1 : (input.right && !input.left) ? 1 : 0;
+    if (ix !== 0) { s.vx = clamp(s.vx + ix * RUN_ACCEL, -RUN_MAX, RUN_MAX); s.face = ix; }
+    else { s.vx *= s.onGround ? FRICTION_GROUND : FRICTION_AIR; if (Math.abs(s.vx) < 0.05) s.vx = 0; }
+
+    // drop through a one-way ledge: hold down + jump
+    if (s.buffer > 0 && input.down && s.onGround && s.dropThru <= 0) {
+      const under = plats.find((p) => !p.solid &&
+        Math.abs(s.y + PH - p.y) < 3 && s.x + PW > p.x && s.x < p.x + p.w);
+      if (under) { s.dropThru = 10; s.y += 3; s.vy = 1.4; s.onGround = false; s.buffer = 0; }
     }
 
-    if (s.buffer > 0 && (s.grounded || s.coyote > 0)) {
-      s.vy = JUMP_VEL; s.buffer = 0; s.coyote = 0; s.grounded = false;
+    if (s.buffer > 0) {
+      if (s.onGround || s.coyote > 0) { s.vy = JUMP_V; s.jumps = JUMPS - 1; s.coyote = 0; s.buffer = 0; }
+      else if (s.jumps > 0) { s.vy = HOP_V; s.jumps--; s.buffer = 0; }
     }
 
-    s.vy += GRAV * DT;
-    if (s.vy > MAX_FALL) s.vy = MAX_FALL;
+    s.vy = Math.min(s.vy + GRAVITY, MAX_FALL);
 
-    // X axis
-    s.x += s.vx * DT;
-    for (const pl of plats)
-      if (overlap(s.x, s.y, PW, PH, pl)) { s.x = s.vx > 0 ? pl.x - PW : pl.x + pl.w; s.vx = 0; }
+    // X move + solid resolve + world clamp
+    s.x += s.vx;
+    for (const p of plats) if (p.solid && hit(s, p)) { s.x = s.vx > 0 ? p.x - PW : p.x + p.w; s.vx = 0; }
+    if (s.x < 0) { s.x = 0; s.vx = 0; }
+    if (s.x > level.width - PW) { s.x = level.width - PW; s.vx = 0; }
 
-    // Y axis
-    s.grounded = false;
-    s.y += s.vy * DT;
-    for (const pl of plats)
-      if (overlap(s.x, s.y, PW, PH, pl)) {
-        if (s.vy > 0) { s.y = pl.y - PH; s.grounded = true; }
-        else if (s.vy < 0) s.y = pl.y + pl.h;
+    // Y move + one-way / solid resolve
+    const prevBottom = s.y + PH;
+    s.onGround = false;
+    s.y += s.vy;
+    for (const p of plats) {
+      if (!hit(s, p)) continue;
+      if (!p.solid) {
+        if (s.vy <= 0 || prevBottom > p.y + 1 || s.dropThru > 0) continue;
+        s.y = p.y - PH; s.onGround = true; s.jumps = JUMPS; s.vy = 0;
+      } else {
+        if (s.vy > 0) { s.y = p.y - PH; s.onGround = true; s.jumps = JUMPS; }
+        else if (s.vy < 0) s.y = p.y + p.h;
         s.vy = 0;
       }
-    if (s.grounded) s.coyote = COYOTE_TICKS; else if (s.coyote > 0) s.coyote--;
-
-    if (s.x < 0) s.x = 0;
-    if (s.x > level.width - PW) s.x = level.width - PW;
-    if (s.y > level.height + 200) { s.x = level.spawn.x; s.y = level.spawn.y; s.vx = 0; s.vy = 0; }
+    }
+    if (s.onGround) s.coyote = COYOTE; else if (s.coyote > 0) s.coyote--;
     return s;
   }
 
-  return { DT, PW, PH, MAX_FALL, newState, step };
+  return { W, H, FLOOR_TOP, PW, PH, MAX_FALL, JUMP_V, newState, step };
 });

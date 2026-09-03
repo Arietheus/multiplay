@@ -3,188 +3,133 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>Run Lobby</title>
+<title>Void Runs</title>
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0b0f17; --panel: #111827; --panel2: #0f1522;
-    --line: rgba(255,255,255,.10); --text: #e5e7eb; --muted: #9ca3af;
-    --accent: #3b82f6; --accent2: #2563eb; --danger: #ef4444; --ok: #10b981;
+    --pit:#171c1a; --pit-lit:#1f2624; --stone:#2c3531; --stone-lit:#455049;
+    --bone:#ede6d2; --sulfur:#d6c63c; --rust:#c0562e; --ember:#9e2b45;
+    --mint:#7fc4a8; --dim:#7c8079;
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: var(--bg);
-    color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  canvas { display: block; cursor: none; }
-  button { font: inherit; cursor: pointer; }
-  .hidden { display: none !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; overflow:hidden; background:var(--pit); color:var(--bone);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  canvas { display:block; cursor:none; background:var(--pit); }
+  button { font:inherit; cursor:pointer; }
+  .hidden { display:none !important; }
 
-  /* ---- Auth ---- */
-  #auth {
-    position: fixed; inset: 0; z-index: 50; display: flex;
-    align-items: center; justify-content: center;
-    background: radial-gradient(1200px 600px at 50% -10%, #16213a 0%, var(--bg) 60%);
-  }
-  .card {
-    width: 360px; max-width: calc(100vw - 32px);
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 14px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
-  }
-  .card h1 { font-size: 20px; margin-bottom: 4px; letter-spacing: .5px; }
-  .card p.sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
-  .tabs button {
-    flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--panel2); color: var(--muted);
-  }
-  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .field { margin-bottom: 12px; }
-  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  .field input {
-    width: 100%; padding: 10px 12px; border-radius: 8px;
-    background: var(--panel2); border: 1px solid var(--line);
-    color: var(--text); font: inherit;
-  }
-  .field input:focus { outline: none; border-color: var(--accent); }
-  .primary {
-    width: 100%; padding: 11px; border: none; border-radius: 8px;
-    background: var(--accent); color: #fff; margin-top: 4px;
-  }
-  .primary:hover { background: var(--accent2); }
-  .msg { min-height: 16px; font-size: 12px; color: var(--danger); margin-top: 10px; }
-  .hint { font-size: 11px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+  #auth { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(900px 500px at 50% -5%, var(--pit-lit) 0%, var(--pit) 60%); }
+  .card { width:360px; max-width:calc(100vw - 32px); background:var(--stone);
+    border-left:3px solid var(--sulfur); border-radius:4px; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .card h1 { font-size:22px; letter-spacing:3px; color:var(--bone); margin-bottom:2px; }
+  .card p.sub { color:var(--dim); font-size:12px; margin-bottom:18px; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; }
+  .tabs button { flex:1; padding:8px; border-radius:3px; border:none; background:var(--pit-lit); color:var(--dim); }
+  .tabs button.active { background:var(--sulfur); color:var(--pit); }
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:11px; color:var(--dim); margin-bottom:6px; letter-spacing:1px; }
+  .field input { width:100%; padding:10px 12px; border-radius:3px; background:var(--pit); border:1px solid var(--stone-lit); color:var(--bone); font:inherit; }
+  .field input:focus { outline:none; border-color:var(--sulfur); }
+  .primary { width:100%; padding:11px; border:none; border-radius:3px; background:var(--sulfur); color:var(--pit); margin-top:4px; letter-spacing:1px; }
+  .primary:hover { background:var(--bone); }
+  .msg { min-height:16px; font-size:12px; color:var(--ember); margin-top:10px; }
+  .hint { font-size:11px; color:var(--dim); margin-top:12px; line-height:1.5; }
 
-  /* ---- HUD ---- */
-  #hud {
-    position: fixed; top: 12px; left: 12px; z-index: 20; display: flex;
-    gap: 10px; align-items: center; font-size: 13px; user-select: none;
-  }
-  #dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger);
-    box-shadow: 0 0 8px currentColor; color: var(--danger); }
-  #dot.on { background: var(--ok); color: var(--ok); }
-  #room { color: var(--muted); }
-  #topright { position: fixed; top: 12px; right: 12px; z-index: 20; display: flex; gap: 8px; }
-  #topright button {
-    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
-    background: rgba(17,24,39,.85); color: var(--text); backdrop-filter: blur(6px);
-  }
-  #topright button:hover { border-color: var(--accent); }
+  #hud { position:fixed; top:12px; left:14px; z-index:20; display:flex; gap:12px; align-items:center; user-select:none; }
+  #hearts { display:flex; gap:4px; }
+  #hearts .h { width:14px; height:14px; background:var(--ember); clip-path:polygon(50% 100%,0 38%,20% 0,50% 22%,80% 0,100% 38%); }
+  #hearts .h.off { background:var(--stone-lit); }
+  #dot { width:9px; height:9px; border-radius:50%; background:var(--ember); box-shadow:0 0 8px currentColor; color:var(--ember); }
+  #dot.on { background:var(--mint); color:var(--mint); }
+  #stat { color:var(--dim); font-size:13px; }
+  #topright { position:fixed; top:12px; right:14px; z-index:20; display:flex; gap:8px; }
+  #topright button { padding:6px 12px; border-radius:3px; border:none; background:var(--stone); color:var(--bone); }
+  #topright button:hover { background:var(--stone-lit); }
+  #wave { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:20; color:var(--sulfur); letter-spacing:2px; font-size:14px; user-select:none; }
 
-  /* ---- Door prompt ---- */
-  #prompt {
-    position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%); z-index: 20;
-    background: rgba(17,24,39,.9); border: 1px solid var(--line); border-radius: 10px;
-    padding: 8px 14px; font-size: 13px; user-select: none;
-  }
-  #prompt kbd { background: #1f2937; border: 1px solid var(--line); border-radius: 4px;
-    padding: 1px 7px; margin: 0 2px; }
+  #bossbar { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:20; width:min(520px,70vw); display:none; }
+  #bossbar .name { font-size:11px; letter-spacing:2px; color:var(--bone); margin-bottom:4px; text-align:center; }
+  #bossbar .track { height:8px; background:var(--pit-lit); border:1px solid var(--stone-lit); }
+  #bossbar .fill { height:100%; background:var(--ember); width:100%; }
 
-  /* ---- Chat ---- */
-  #chat { position: fixed; bottom: 12px; left: 12px; z-index: 20; width: 360px; max-width: 60vw; }
-  #chatlog {
-    display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow-y: auto;
-    padding: 8px; margin-bottom: 6px; font-size: 12.5px; line-height: 1.4;
-    background: rgba(11,15,23,.55); border: 1px solid var(--line); border-radius: 10px;
-  }
-  #chatlog:empty { display: none; }
-  #chatlog .name { font-weight: 700; }
-  #chatlog .sys { color: var(--muted); font-style: italic; }
-  #chatform { display: flex; gap: 6px; }
-  #chatform.hidden { display: none; }
-  #chatinput {
-    flex: 1; padding: 8px 10px; border-radius: 8px; background: var(--panel2);
-    border: 1px solid var(--line); color: var(--text); font: inherit;
-  }
-  #chatinput:focus { outline: none; border-color: var(--accent); }
+  #prompt { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); z-index:20;
+    background:var(--stone); border-left:3px solid var(--sulfur); border-radius:3px; padding:8px 14px; font-size:13px; user-select:none; }
+  #prompt kbd { background:var(--pit); border:1px solid var(--stone-lit); border-radius:3px; padding:1px 7px; margin:0 2px; }
 
-  /* ---- Overlays (controls + runs) ---- */
-  .overlay {
-    position: fixed; inset: 0; z-index: 40; display: flex; align-items: center;
-    justify-content: center; background: rgba(3,6,12,.7); backdrop-filter: blur(3px);
-  }
-  .modal {
-    width: 440px; max-width: calc(100vw - 32px); max-height: 80vh; overflow-y: auto;
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 14px; padding: 22px;
-  }
-  .modal h2 { font-size: 17px; margin-bottom: 14px; display: flex; justify-content: space-between; }
-  .modal h2 button { background: none; border: none; color: var(--muted); font-size: 18px; }
-  .bindrow, .runrow {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px;
-    background: var(--panel2);
-  }
-  .bindrow .act { color: var(--text); }
-  .bindrow .soon { color: var(--muted); font-size: 11px; }
-  .keybtn {
-    min-width: 96px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line);
-    background: #0b0f17; color: var(--text); text-align: center;
-  }
-  .keybtn.listening { border-color: var(--accent); color: var(--accent); }
-  .runrow .meta { color: var(--muted); font-size: 12px; }
-  .runrow button, .modal .primary.small { width: auto; padding: 6px 14px; margin: 0; }
-  .modal .createbar { display: flex; gap: 8px; margin-top: 6px; }
-  .empty { color: var(--muted); font-size: 13px; padding: 10px 2px; }
+  #chat { position:fixed; bottom:12px; left:12px; z-index:20; width:340px; max-width:56vw; }
+  #chatlog { display:flex; flex-direction:column; gap:3px; max-height:150px; overflow-y:auto; padding:8px; margin-bottom:6px;
+    font-size:12.5px; line-height:1.4; background:rgba(23,28,26,.6); border-left:2px solid var(--stone-lit); }
+  #chatlog:empty { display:none; }
+  #chatlog .name { font-weight:700; }
+  #chatlog .sys { color:var(--dim); font-style:italic; }
+  #chatform { display:flex; gap:6px; }
+  #chatform.hidden { display:none; }
+  #chatinput { flex:1; padding:8px 10px; border-radius:3px; background:var(--pit); border:1px solid var(--stone-lit); color:var(--bone); font:inherit; }
+  #chatinput:focus { outline:none; border-color:var(--sulfur); }
+
+  .overlay { position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; background:rgba(10,12,11,.72); }
+  .modal { width:460px; max-width:calc(100vw - 32px); max-height:82vh; overflow-y:auto; background:var(--stone); border-left:3px solid var(--sulfur); border-radius:4px; padding:22px; }
+  .modal h2 { font-size:16px; letter-spacing:2px; margin-bottom:14px; display:flex; justify-content:space-between; }
+  .modal h2 button { background:none; border:none; color:var(--dim); font-size:18px; }
+  .modal h3 { font-size:11px; letter-spacing:2px; color:var(--dim); margin:16px 0 8px; }
+  .bindrow, .runrow { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--pit-lit); border-radius:3px; margin-bottom:6px; }
+  .bindrow .soon { color:var(--dim); font-size:11px; }
+  .keybtn { min-width:110px; padding:6px 10px; border-radius:3px; border:1px solid var(--stone-lit); background:var(--pit); color:var(--bone); text-align:center; }
+  .keybtn.listening { border-color:var(--sulfur); color:var(--sulfur); }
+  .skins { display:flex; gap:8px; flex-wrap:wrap; }
+  .skin { width:54px; height:38px; border-radius:3px; border:2px solid transparent; cursor:pointer; display:flex; flex-direction:column; overflow:hidden; }
+  .skin.sel { border-color:var(--sulfur); }
+  .skin span { flex:1; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--pit-lit); border-radius:3px; }
+  .toggle button { padding:5px 12px; border-radius:3px; border:none; background:var(--stone-lit); color:var(--bone); }
+  .toggle button.on { background:var(--mint); color:var(--pit); }
+  .runrow .meta { color:var(--dim); font-size:12px; }
+  .runrow button, .modal .primary.small { width:auto; padding:6px 14px; margin:0; }
+  .createbar { display:flex; gap:8px; margin-top:8px; }
+  .empty { color:var(--dim); font-size:13px; padding:10px 2px; }
 </style>
 </head>
 <body>
-  <!-- Auth -->
   <div id="auth">
     <div class="card">
-      <h1>RUN LOBBY</h1>
-      <p class="sub">Sign in to enter the lobby.</p>
-      <div class="tabs">
-        <button id="tabLogin" class="active">Log in</button>
-        <button id="tabRegister">Create account</button>
-      </div>
-      <div class="field">
-        <label for="u">Username</label>
-        <input id="u" autocomplete="username" maxlength="20" />
-      </div>
-      <div class="field">
-        <label for="pw">Password</label>
-        <input id="pw" type="password" autocomplete="current-password" maxlength="200" />
-      </div>
-      <button id="submit" class="primary">Log in</button>
+      <h1>VOID RUNS</h1>
+      <p class="sub">Sign in to enter the hollow.</p>
+      <div class="tabs"><button id="tabLogin" class="active">Log in</button><button id="tabRegister">Create account</button></div>
+      <div class="field"><label>USERNAME</label><input id="u" autocomplete="username" maxlength="20" /></div>
+      <div class="field"><label>PASSWORD</label><input id="pw" type="password" autocomplete="current-password" maxlength="200" /></div>
+      <button id="submit" class="primary">LOG IN</button>
       <div id="authmsg" class="msg"></div>
       <div class="hint" id="authhint"></div>
     </div>
   </div>
 
-  <!-- Game -->
   <div id="game" class="hidden">
     <canvas id="c"></canvas>
-    <div id="hud"><span id="dot"></span><span id="who"></span><span id="room"></span></div>
-    <div id="topright">
-      <button id="btnControls">Controls</button>
-      <button id="btnLogout">Log out</button>
-    </div>
+    <div id="hud"><span id="dot"></span><div id="hearts"></div><span id="stat"></span></div>
+    <div id="wave"></div>
+    <div id="topright"><button id="btnControls">Options</button><button id="btnLogout">Log out</button></div>
     <div id="prompt" class="hidden"></div>
-    <div id="chat">
-      <div id="chatlog"></div>
-      <form id="chatform" class="hidden" autocomplete="off">
-        <input id="chatinput" maxlength="200" placeholder="say something…" />
-      </form>
-    </div>
+    <div id="bossbar"><div class="name" id="bossname"></div><div class="track"><div class="fill" id="bossfill"></div></div></div>
+    <div id="chat"><div id="chatlog"></div><form id="chatform" class="hidden" autocomplete="off"><input id="chatinput" maxlength="200" placeholder="say something…" /></form></div>
   </div>
 
-  <!-- Controls overlay -->
   <div id="controls" class="overlay hidden">
     <div class="modal">
-      <h2>Controls <button id="closeControls">×</button></h2>
-      <div id="bindlist"></div>
+      <h2>OPTIONS <button id="closeControls">×</button></h2>
+      <h3>SKIN</h3><div id="skinlist" class="skins"></div>
+      <h3>MOUSE AIM</h3>
+      <div class="toggle"><span>Aim with the mouse</span><button id="toggleMouse">OFF</button></div>
+      <h3>CONTROLS</h3><div id="bindlist"></div>
       <button id="resetBinds" class="primary small" style="margin-top:8px;">Reset to defaults</button>
     </div>
   </div>
 
-  <!-- Run browser overlay -->
   <div id="runs" class="overlay hidden">
     <div class="modal">
-      <h2>Runs <button id="closeRuns">×</button></h2>
+      <h2>RUNS <button id="closeRuns">×</button></h2>
       <div id="runlist"></div>
-      <div class="createbar">
-        <button id="createRun" class="primary small">Create a run</button>
-        <button id="refreshRuns" class="keybtn">Refresh</button>
-      </div>
+      <div class="createbar"><button id="createRun" class="primary small">Create a run</button><button id="refreshRuns" class="keybtn">Refresh</button></div>
     </div>
   </div>
 
