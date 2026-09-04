@@ -1,10 +1,11 @@
 // Shared, deterministic physics — ported from Void Shell's per-frame model so
 // the feel is identical. Runs on the server (require) and client (script tag);
-// client-side prediction depends on both computing the same result.
+// client-side prediction depends on both computing the same result. Dash is
+// baked in here so it's predicted + reconciled exactly like movement.
 //
 // Void Shell values (per 60fps frame): GRAVITY 0.48, JUMP_V -9, friction
-// .75 ground / .92 air, runMax 3.6, runAccel 0.85, coyote/buffer 7, one-way
-// ledges (only `solid` platforms block and stop bullets).
+// .75 ground / .92 air, runMax 3.6, runAccel 0.85, coyote/buffer 7, dashSpeed
+// 11 / dashTime 10 / dashCd 150, one-way ledges (only `solid` platforms block).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -16,6 +17,7 @@
   const JUMP_V = -9, HOP_V = -9;
   const RUN_MAX = 3.6, RUN_ACCEL = 0.85;
   const COYOTE = 7, BUFFER = 7, JUMPS = 1;
+  const DASH_SPEED = 11, DASH_TIME = 10, DASH_CD = 150;
   const PW = 15, PH = 21;
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -24,12 +26,37 @@
   function newState(spawn) {
     return { x: spawn.x, y: spawn.y, vx: 0, vy: 0,
       onGround: false, coyote: 0, jumps: JUMPS, face: 1,
-      dropThru: 0, buffer: 0, pjump: false };
+      dropThru: 0, buffer: 0, pjump: false,
+      dashT: 0, dashCd: 0, dashX: 1, dashY: 0 };
   }
 
-  // input = { left, right, jump, down }; level = { platforms, width, height, spawn }
+  // input = { left, right, jump, down, dash, ax, ay }; level = { platforms, width, height, spawn }
   function step(s, input, level) {
     const plats = level.platforms;
+    if (s.dashCd > 0) s.dashCd--;
+
+    // dash trigger (edge). Direction from the aim vector the client sends, else facing.
+    if (input.dash && s.dashCd <= 0 && s.dashT <= 0) {
+      let dx = input.ax || 0, dy = input.ay || 0;
+      if (!dx && !dy) dx = s.face;
+      const len = Math.hypot(dx, dy) || 1;
+      s.dashX = dx / len; s.dashY = dy / len;
+      s.dashT = DASH_TIME; s.dashCd = DASH_CD;
+    }
+
+    // during a dash: fixed-velocity burst, ignores gravity + one-way ledges (VS feel)
+    if (s.dashT > 0) {
+      s.dashT--; s.pjump = input.jump; s.buffer = 0;
+      s.vx = s.dashX * DASH_SPEED; s.vy = s.dashY * DASH_SPEED * 0.72;
+      s.x += s.vx;
+      for (const p of plats) if (p.solid && hit(s, p)) { s.x = s.vx > 0 ? p.x - PW : p.x + p.w; s.vx = 0; }
+      s.x = clamp(s.x, 0, level.width - PW);
+      s.onGround = false; s.y += s.vy;
+      for (const p of plats) { if (!p.solid || !hit(s, p)) continue;
+        if (s.vy > 0) { s.y = p.y - PH; s.onGround = true; s.jumps = JUMPS; } else if (s.vy < 0) s.y = p.y + p.h; s.vy = 0; }
+      if (s.onGround) s.coyote = COYOTE;
+      return s;
+    }
 
     if (input.jump && !s.pjump) s.buffer = BUFFER;
     s.pjump = input.jump;
@@ -54,13 +81,11 @@
 
     s.vy = Math.min(s.vy + GRAVITY, MAX_FALL);
 
-    // X move + solid resolve + world clamp
     s.x += s.vx;
     for (const p of plats) if (p.solid && hit(s, p)) { s.x = s.vx > 0 ? p.x - PW : p.x + p.w; s.vx = 0; }
     if (s.x < 0) { s.x = 0; s.vx = 0; }
     if (s.x > level.width - PW) { s.x = level.width - PW; s.vx = 0; }
 
-    // Y move + one-way / solid resolve
     const prevBottom = s.y + PH;
     s.onGround = false;
     s.y += s.vy;
@@ -79,5 +104,5 @@
     return s;
   }
 
-  return { W, H, FLOOR_TOP, PW, PH, MAX_FALL, JUMP_V, newState, step };
+  return { W, H, FLOOR_TOP, PW, PH, MAX_FALL, JUMP_V, DASH_TIME, DASH_CD, newState, step };
 });

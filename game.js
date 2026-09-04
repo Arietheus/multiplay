@@ -134,13 +134,14 @@ function handle(p, m) {
   switch (m.type) {
     case 'input': {
       const k = m.k | 0;
-      p.queue.push({ seq: m.seq | 0, left: !!(k & 1), right: !!(k & 2), jump: !!(k & 4), down: !!(k & 8) });
+      const inp = { seq: m.seq | 0, left: !!(k & 1), right: !!(k & 2), jump: !!(k & 4), down: !!(k & 8) };
+      if (m.dash) { inp.dash = true; inp.ax = +m.ax || 0; inp.ay = +m.ay || 0; }
+      p.queue.push(inp);
       if (p.queue.length > 180) p.queue.shift();
       break;
     }
     case 'aim': { const x = +m.x, y = +m.y, l = Math.hypot(x, y); if (l > 0) p.aim = { x: x / l, y: y / l }; break; }
     case 'fire': p.firing = !!m.down; break;
-    case 'dash': requestDash(p); break;
     case 'interact': tryInteract(p); break;
     case 'createRun': createRun(p); break;
     case 'joinRun': joinRun(p, m.id); break;
@@ -148,12 +149,6 @@ function handle(p, m) {
     case 'chat': { let t = typeof m.text === 'string' ? m.text : ''; t = t.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, CHAT_MAX);
       if (t) broadcast(p.roomId, { type: 'chat', from: p.username, color: p.color, text: t }); break; }
   }
-}
-
-function requestDash(p) {
-  if (p.dead || p.dashCd > 0 || p.dashT > 0) return;
-  p.dashT = DASH_TIME; p.dashCd = DASH_CD; p.iframes = Math.max(p.iframes, DASH_TIME + 4);
-  let ax = p.aim.x, ay = p.aim.y; const l = Math.hypot(ax, ay) || 1; p.dashX = ax / l; p.dashY = ay / l;
 }
 
 function doorUnder(p) { const room = rooms.get(p.roomId); if (!room || !room.level.doors) return null;
@@ -291,7 +286,7 @@ function damageFoe(room, f, amount, owner) {
   }
 }
 function hurtPlayer(p) {
-  if (p.dead || p.iframes > 0) return;
+  if (p.dead || p.iframes > 0 || p.dashT > 0) return;
   p.hp--; p.iframes = IFRAMES;
   if (p.hp <= 0) { p.dead = true; p.hp = 0; broadcast(p.roomId, { type: 'system', text: `${p.username} went down.` }); }
 }
@@ -303,21 +298,18 @@ function simulate() {
     for (const uid of room.players) {
       const p = players.get(uid); if (!p) continue;
       if (p.iframes > 0) p.iframes--;
-      if (p.dashCd > 0) p.dashCd--;
       if (p.fireCd > 0) p.fireCd--;
 
-      if (p.dashT > 0) {                        // dash overrides normal movement
-        p.dashT--; p.vx = p.dashX * DASH_SPEED; p.vy = p.dashY * DASH_SPEED * 0.72;
-        p.x += p.vx; p.y += p.vy;
-        p.x = clamp(p.x, 0, W - PW); p.y = clamp(p.y, 0, H);
-        while (p.queue.length) { const inp = p.queue.shift(); p.lastSeq = inp.seq; p.input = inp; }
-      } else {
-        while (p.queue.length) { const inp = p.queue.shift(); if (!p.dead) Physics.step(p, inp, room.level); p.lastSeq = inp.seq; p.input = inp; }
-      }
-      // firing
+      // dash + movement are both in the shared physics now (predicted + reconciled)
+      while (p.queue.length) { const inp = p.queue.shift(); if (!p.dead) Physics.step(p, inp, room.level); p.lastSeq = inp.seq; p.input = inp; }
+
+      // firing — Void Shell spawn: offset along aim, tiny jitter
       if (room.kind === 'run' && p.firing && !p.dead && p.fireCd <= 0) {
         const a = p.aim, c = { x: p.x + PW / 2, y: p.y + PH / 2 };
-        room.pBullets.push({ x: c.x, y: c.y, vx: a.x * BULLET_SPEED, vy: a.y * BULLET_SPEED, life: BULLET_LIFE, owner: p.userId, color: p.color });
+        const ang = (Math.random() - 0.5) * 0.06, cos = Math.cos(ang), sin = Math.sin(ang);
+        room.pBullets.push({ x: c.x + a.x * 7, y: c.y + a.y * 7,
+          vx: (a.x * cos - a.y * sin) * BULLET_SPEED, vy: (a.x * sin + a.y * cos) * BULLET_SPEED,
+          life: BULLET_LIFE, owner: p.userId, color: p.color });
         p.fireCd = FIRE_CD;
       }
       // fell into chasm
@@ -329,7 +321,7 @@ function simulate() {
     // foes
     for (const f of [...room.foes]) stepFoe(room, f);
     // foe contact damage
-    for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead) continue;
+    for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead || p.dashT > 0) continue;
       const core = { x: p.x + PW / 2 - CORE / 2, y: p.y + PH / 2 - CORE / 2, w: CORE, h: CORE };
       for (const f of room.foes) if (overlap(f, core)) { hurtPlayer(p); break; } }
 
@@ -343,7 +335,7 @@ function simulate() {
       if (dead) continue;
       // hit player cores
       let struck = false;
-      for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead || p.iframes > 0) continue;
+      for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead || p.iframes > 0 || p.dashT > 0) continue;
         const cx = p.x + PW / 2, cy = p.y + PH / 2; if (Math.abs(b.x - cx) < CORE / 2 + b.r && Math.abs(b.y - cy) < CORE / 2 + b.r) { hurtPlayer(p); struck = true; break; } }
       if (!struck) fs.push(b);
     }
@@ -386,14 +378,14 @@ function broadcastStates() {
       t: f.t || 0, ph: f.phase || '', ch: f.charge || 0, vx: +(f.vx || 0).toFixed(2), vy: +(f.vy || 0).toFixed(2) }));
     const fshots = room.foeShots.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), r: b.r,
       vx: +b.vx.toFixed(2), vy: +b.vy.toFixed(2), g: b.g || 0 }));
-    const pshots = room.pBullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), color: b.color,
+    const pshots = room.pBullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), color: b.color, owner: b.owner,
       vx: +b.vx.toFixed(2), vy: +b.vy.toFixed(2) }));
     for (const uid of room.players) {
       const p = players.get(uid); if (!p || p.ws.readyState !== 1) continue;
       p.ws.send(JSON.stringify({ type: 'state', players: list, foes, fshots, pshots, wave: room.wave,
         you: { x: p.x, y: p.y, vx: p.vx, vy: p.vy, onGround: p.onGround, coyote: p.coyote, jumps: p.jumps,
           face: p.face, dropThru: p.dropThru, buffer: p.buffer, pjump: p.pjump, hp: p.hp, dead: p.dead,
-          dashT: p.dashT, dashCd: p.dashCd, score: p.score, lastSeq: p.lastSeq } }));
+          dashT: p.dashT, dashCd: p.dashCd, dashX: p.dashX, dashY: p.dashY, score: p.score, lastSeq: p.lastSeq } }));
     }
   }
 }

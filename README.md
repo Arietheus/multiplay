@@ -24,6 +24,11 @@ public/game.js     Client: prediction/reconciliation, aim, Void Shell rendering
 - **Combat feel** — 5 hearts, the signature tiny **core hurtbox** (only your
   centre dot takes damage, so dense patterns have threadable gaps), 92-frame
   i-frames, fire (bulletSpeed 8.4, cooldown 7), and a dash with i-frames.
+- **Netcode juice** — your movement, **dash**, and **your own shots** are all
+  predicted client-side and reconciled against the authoritative server, so they
+  feel instant. Enemies and enemy bullets are extrapolated between snapshots for
+  smooth 60fps motion. Screen **shake** and particle **bursts** (both copied from
+  Void Shell) fire on hits, dashes, and kills.
 - **Palette + 5 skins** — the `C` palette (sulfur/ash/oxide/brine/bloom),
   switchable live in Options; the whole game repaints, sprites and chrome alike.
 - **Controls** — StarBreak-style: arrows move, ↑/↓ aim, **Space/F** jump, **D**

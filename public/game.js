@@ -83,7 +83,7 @@ function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new 
   ws.onmessage=(ev)=>onMessage(JSON.parse(ev.data)); }
 function onMessage(m){ switch(m.type){
   case 'welcome': me=m.user; break;
-  case 'room': level=m; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[];
+  case 'room': level=m; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[]; myShots=[]; bits=[]; shakeAmt=0;
     $('stat').textContent = m.kind==='run'?'':''; $('bossbar').style.display='none'; closeRuns(); break;
   case 'state': onState(m); break;
   case 'wave': waveNo=m.wave; $('wave').textContent = level && level.kind==='run' ? `WAVE ${m.wave}`+(m.boss?` · ${m.boss.toUpperCase()}`:'') : ''; if(m.boss)addSys(m.boss+' approaches.'); break;
@@ -92,7 +92,7 @@ function onMessage(m){ switch(m.type){
   case 'runList': showRuns(m.runs); break; } }
 function onState(m){ const now=performance.now();
   const seen=new Set();
-  for(const p of m.players){ if(p.id===(me&&me.id)) continue; seen.add(p.id);
+  for(const p of m.players){ if(p.id===(me&&me.id)){ myColor=p.color; continue; } seen.add(p.id);
     let r=remotes.get(p.id); if(!r){r={buffer:[],color:p.color,name:p.name};remotes.set(p.id,r);}
     r.color=p.color; r.name=p.name; r.hp=p.hp; r.dead=p.dead; r.iframes=p.iframes; r.aimx=p.aimx; r.aimy=p.aimy;
     r.buffer.push({t:now,x:p.x,y:p.y,face:p.face}); if(r.buffer.length>12)r.buffer.shift(); }
@@ -104,7 +104,9 @@ function onState(m){ const now=performance.now();
     e.kind=f.kind; e.boss=f.boss; e.w=f.w; e.h=f.h; e.hp=f.hp; e.maxHp=f.maxHp; e.hit=f.hit;
     e.ph=f.ph; e.ch=f.ch; e.vx=f.vx; e.vy=f.vy; e.serverT=f.t; e.atMs=now;
     e.buf.push({t:now,x:f.x,y:f.y}); if(e.buf.length>12)e.buf.shift(); }
-  for(const id of foeBuf.keys()) if(!fseen.has(id)) foeBuf.delete(id);
+  for(const id of foeBuf.keys()) if(!fseen.has(id)){ const e=foeBuf.get(id); const last=e.buf[e.buf.length-1];
+    if(last){ if(e.boss){ shake(12); burst(last.x+e.w/2,last.y+e.h/2,30,C.ember,4.2,38); } else burst(last.x+(e.w||8)/2,last.y+(e.h||8)/2,10,C.bone,3,22); }
+    foeBuf.delete(id); }
   fshots=m.fshots||[]; pshots=m.pshots||[]; foesAt=now;
   const boss=(m.foes||[]).find(f=>f.kind==='boss');
   if(boss){ $('bossbar').style.display='block'; $('bossname').textContent='BROOD MAW'; $('bossfill').style.width=Math.max(0,100*boss.hp/(boss.maxHp||1))+'%'; }
@@ -113,15 +115,17 @@ function onState(m){ const now=performance.now();
   if(m.you && self && level){
     const y=m.you;
     if(y.dead!==undefined) selfDead=y.dead;
+    if(y.hp<selfHp){ shake(9); burst(self.x+PW/2,self.y+PH/2,14,C.ember,3.4,30); }
     self.x=y.x; self.y=y.y; self.vx=y.vx; self.vy=y.vy; self.onGround=y.onGround; self.coyote=y.coyote;
     self.jumps=y.jumps; self.face=y.face; self.dropThru=y.dropThru; self.buffer=y.buffer; self.pjump=y.pjump;
-    selfHp=y.hp; dashActive=y.dashT>0; dashCd=y.dashCd; myScore=y.score;
+    self.dashT=y.dashT; self.dashCd=y.dashCd; if(y.dashX!==undefined){ self.dashX=y.dashX; self.dashY=y.dashY; }
+    selfHp=y.hp; dashCd=y.dashCd; myScore=y.score;
     pending=pending.filter(i=>i.seq>y.lastSeq);
-    if(!dashActive) for(const i of pending) Physics.step(self,i.input,level);
+    for(const i of pending) Physics.step(self,i.input,level);
   }
   updateHud();
 }
-let selfHp=5, selfDead=false, dashActive=false, dashCd=0, myScore=0;
+let selfHp=5, selfDead=false, dashCd=0, myScore=0;
 function updateHud(){ const h=$('hearts'); if(h.children.length!==5){ h.innerHTML=''; for(let i=0;i<5;i++){const d=document.createElement('div');d.className='h';h.appendChild(d);} }
   for(let i=0;i<5;i++) h.children[i].classList.toggle('off', i>=selfHp);
   $('hearts').style.display = (level&&level.kind==='run')?'flex':'none';
@@ -146,10 +150,44 @@ function computeAim(){ // returns normalized aim in game space
   if(ax===0&&ay===0){ ax=self?self.face:1; } else if(ay<0&&ax===0){ ax=self?self.face:1; }
   const l=Math.hypot(ax,ay)||1; return {x:ax/l,y:ay/l};
 }
+// --- screen shake, ported from Void Shell (state.shake, decay *0.86) ---
+let shakeAmt=0;
+function shake(a){ shakeAmt=Math.min(16, shakeAmt+a); }
+// --- particle bits, ported from Void Shell's burst()/stepBits()/drawBits() ---
+let bits=[];
+function burst(x,y,count,color,speed=3,life=26){
+  for(let i=0;i<count;i++){ const a=Math.random()*Math.PI*2, s=speed*(0.35+Math.random()*0.9);
+    bits.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:life*(0.6+Math.random()*0.7),max:life,color,size:1+Math.random()*2,grav:0.14}); }
+}
+function stepBits(){ for(let i=bits.length-1;i>=0;i--){ const b=bits[i]; b.x+=b.vx; b.y+=b.vy; b.vy+=b.grav; b.vx*=0.96; b.life--; if(b.life<=0)bits.splice(i,1); } }
+function drawBits(){ for(const b of bits){ ctx.globalAlpha=Math.max(0,b.life/b.max); ctx.fillStyle=b.color; ctx.fillRect(b.x,b.y,b.size,b.size); } ctx.globalAlpha=1; }
+
+// --- client-predicted own shots (server stays authoritative for damage) ---
+let myShots=[], myFireCd=0, dashQueued=false, dashAim={x:1,y:0}, myColor=null;
+function shotHitsSolid(s){ for(const p of level.platforms) if(p.solid && s.x>p.x&&s.x<p.x+p.w&&s.y>p.y&&s.y<p.y+p.h) return true; return false; }
+function predictFire(blocked){
+  if(myFireCd>0)myFireCd--;
+  if(!blocked && firing && !selfDead && level && level.kind==='run' && myFireCd<=0){
+    const a=computeAim(); myShots.push({x:self.x+PW/2+a.x*7,y:self.y+PH/2+a.y*7,vx:a.x*8.4,vy:a.y*8.4,life:64}); myFireCd=7;
+  }
+  for(const s of myShots){ s.x+=s.vx; s.y+=s.vy; s.life--; }
+  myShots=myShots.filter(s=> s.life>0 && s.x>-10&&s.x<W+10&&s.y>-10&&s.y<H+10 && !shotHitsSolid(s));
+}
+
 // Sampled every tick by a fixed 60Hz loop (see startGame): reads currently-held
-// keys, predicts locally, and streams the input to the server. Sending every
-// tick (not just on key events) is what keeps gravity/momentum advancing.
-function sendInput(){ if(!ws||!connected||!self||!level)return; const b=uiBlocking(); const mask=((!b&&held.left)?1:0)|((!b&&held.right)?2:0)|((!b&&held.jump)?4:0)|((!b&&held.aimDown)?8:0); const input={left:!b&&held.left,right:!b&&held.right,jump:!b&&held.jump,down:!b&&held.aimDown}; ws.send(JSON.stringify({type:'input',seq:++inputSeq,k:mask})); pending.push({seq:inputSeq,input}); if(pending.length>200)pending.shift(); if(!dashActive)Physics.step(self,input,level); }
+// keys, predicts locally (movement + dash + own shots), and streams input.
+function sendInput(){ if(!ws||!connected||!self||!level)return; const b=uiBlocking();
+  const mask=((!b&&held.left)?1:0)|((!b&&held.right)?2:0)|((!b&&held.jump)?4:0)|((!b&&held.aimDown)?8:0);
+  const input={left:!b&&held.left,right:!b&&held.right,jump:!b&&held.jump,down:!b&&held.aimDown};
+  const msg={type:'input',seq:++inputSeq,k:mask};
+  if(dashQueued && !b){ input.dash=true; input.ax=dashAim.x; input.ay=dashAim.y; msg.dash=1; msg.ax=+dashAim.x.toFixed(3); msg.ay=+dashAim.y.toFixed(3); }
+  dashQueued=false;
+  ws.send(JSON.stringify(msg));
+  pending.push({seq:inputSeq,input}); if(pending.length>200)pending.shift();
+  Physics.step(self,input,level);
+  if(input.dash){ burst(self.x+PW/2,self.y+PH/2,8,C.bone,2,16); }
+  predictFire(b); stepBits();
+}
 function sendFire(down){ if(ws&&connected)ws.send(JSON.stringify({type:'fire',down:!!down})); }
 function sendAim(){ if(!ws||!connected)return; const a=computeAim(); if(Math.abs(a.x-lastAim.x)>0.02||Math.abs(a.y-lastAim.y)>0.02){ lastAim=a; ws.send(JSON.stringify({type:'aim',x:a.x,y:a.y})); } }
 
@@ -169,7 +207,7 @@ window.addEventListener('keydown',(e)=>{
     case 'aimUp': held.aimUp=true; break;
     case 'aimDown': held.aimDown=true; break;
     case 'fire': if(!firing){firing=true; sendFire(true);} break;
-    case 'dash': if(ws&&connected)ws.send(JSON.stringify({type:'dash'})); break;
+    case 'dash': dashQueued=true; dashAim=computeAim(); break;
     case 'interact': if(ws&&connected)ws.send(JSON.stringify({type:'interact'})); break;
   }
 });
@@ -334,7 +372,8 @@ function draw(){
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle=C.pit; ctx.fillRect(0,0,VW,VH);
   if(!level||!me||!self){ requestAnimationFrame(draw); return; }
   const now=performance.now();
-  ctx.setTransform(scale,0,0,scale,ox,oy);
+  let shx=0,shy=0; if(shakeAmt>0.4){ shx=(Math.random()*2-1)*shakeAmt*scale; shy=(Math.random()*2-1)*shakeAmt*scale; shakeAmt*=0.86; }
+  ctx.setTransform(scale,0,0,scale,ox+shx,oy+shy);
   // arena frame + backdrop
   ctx.fillStyle=C.pitLit; ctx.fillRect(0,0,W,H);
   // platforms
@@ -354,13 +393,18 @@ function draw(){
     drawFoeVS(ef); }
   // foe shots — extrapolated (with gravity for lobs), Void Shell bullet look
   for(const b of fshots){ const bx=b.x+(b.vx||0)*sclamp, by=b.y+(b.vy||0)*sclamp+(b.g?0.5*b.g*sclamp*sclamp:0); drawFoeShotVS(bx,by,b.r,b.color); }
-  // player bullets — extrapolated bolts
-  for(const b of pshots){ const bx=b.x+(b.vx||0)*sclamp, by=b.y+(b.vy||0)*sclamp; drawBolt(bx,by,b.vx,b.vy,b.color); }
+  // player bullets — others' from the server (extrapolated); own are predicted below
+  for(const b of pshots){ if(b.owner===(me&&me.id))continue; const bx=b.x+(b.vx||0)*sclamp, by=b.y+(b.vy||0)*sclamp; drawBolt(bx,by,b.vx,b.vy,b.color); }
+  // own predicted shots (instant feedback; server authoritative for hits)
+  const col=myColor||C.mint;
+  for(const s of myShots){ drawBolt(s.x,s.y,s.vx,s.vy,col); }
+  // particle bits
+  drawBits();
   // remotes
   const rt=now-100;
   for(const [,r] of remotes){ const s=remoteAt(r,rt); if(!s)continue; drawPlayer(s.x,s.y,s.face,r.color,r.dead,r.iframes,s.face,0); ctx.fillStyle=C.bone; ctx.font='10px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(r.name||'',s.x+PW/2,s.y-6); }
   // self
-  const a=computeAim(); drawPlayer(self.x,self.y,self.face,remotes.get(me.id)?.color||C.mint,selfDead,0,a.x,a.y);
+  const a=computeAim(); drawPlayer(self.x,self.y,self.face,myColor||C.mint,selfDead,0,a.x,a.y);
 
   // prompt + reticle (screen space)
   ctx.setTransform(1,0,0,1,0,0);
