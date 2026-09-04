@@ -13,6 +13,15 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 // ---- player combat constants (Void Shell BASE) ----
 const MAX_HP = 5, IFRAMES = 92, CORE = 7.5;
+// Difficulty depths (Void Shell): count/speed/hp/bossHp/maxHp/score multipliers.
+const DIFFS = [
+  { id: 'shallow', name: 'Shallow',       count: 0.70, speed: 0.75, hpAdd: 0, bossMul: 0.70, maxHp: 7, score: 0.6 },
+  { id: 'working', name: 'Working depth', count: 1.00, speed: 1.00, hpAdd: 0, bossMul: 1.00, maxHp: 5, score: 1.0 },
+  { id: 'deep',    name: 'Deep cut',      count: 1.35, speed: 1.35, hpAdd: 1, bossMul: 1.35, maxHp: 4, score: 2.5 },
+  { id: 'abyssal', name: 'Abyssal',       count: 1.70, speed: 1.70, hpAdd: 2, bossMul: 1.75, maxHp: 3, score: 3.8 },
+];
+// Admin accounts (comma-separated usernames in the ADMIN_USERS env var).
+const ADMINS = new Set((process.env.ADMIN_USERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 const FIRE_CD = 7, BULLET_SPEED = 8.4, BULLET_LIFE = 64, BULLET_DMG = 1;
 const DASH_CD = 150, DASH_TIME = 10, DASH_SPEED = 11;
 const CHAT_MAX = 200, RUN_CAP = 8;
@@ -109,8 +118,8 @@ function onConnection(ws, user) {
     ...Physics.newState({ x: 0, y: 0 }),
     input: { left: false, right: false, jump: false, down: false },
     queue: [], lastSeq: 0, roomId: null, alive: true,
-    hp: MAX_HP, iframes: 0, dead: false, score: 0, kills: 0, bossKills: 0,
-    slag: 0, bestWave: 0,
+    hp: MAX_HP, maxHp: MAX_HP, god: false, isAdmin: ADMINS.has(user.username.toLowerCase()),
+    iframes: 0, dead: false, score: 0, kills: 0, bossKills: 0, slag: 0, bestWave: 0,
     aim: { x: 1, y: 0 }, firing: false, fireCd: 0, dashCd: 0, dashT: 0, dashX: 1, dashY: 0 };
   players.set(uid, p);
   ws.on('pong', () => { p.alive = true; });
@@ -121,18 +130,20 @@ function onConnection(ws, user) {
   joinRoom(p, ensureLobby());
 
   ws.on('message', (raw) => { if (raw.length > 2048) return; let m; try { m = JSON.parse(raw); } catch { return; } handle(p, m); });
-  const bye = () => { leaveRoom(p); players.delete(uid); };
+  const bye = () => { if (players.get(uid) === p) { leaveRoom(p); players.delete(uid); } };
   ws.on('close', bye); ws.on('error', bye);
 }
 
 function joinRoom(p, room) {
   p.roomId = room.id; room.players.add(p.userId);
   Object.assign(p, Physics.newState(room.level.spawn));
-  p.queue.length = 0; p.hp = MAX_HP; p.dead = false; p.iframes = 60; p.firing = false;
+  p.maxHp = room.kind === 'run' ? (DIFFS[room.diff] || DIFFS[1]).maxHp : MAX_HP;
+  p.queue.length = 0; p.hp = p.maxHp; p.dead = false; p.god = false; p.iframes = 60; p.firing = false;
   if (room.kind === 'run') { p.score = 0; p.kills = 0; p.bossKills = 0; }
   send(p, { type: 'room', id: room.id, name: room.level.name, kind: room.kind,
     width: room.level.width, height: room.level.height, floorTop: room.level.floorTop,
     host: room.host || null, youHost: room.host === p.username,
+    diff: room.diff || 0, diffName: room.kind === 'run' ? (DIFFS[room.diff] || DIFFS[1]).name : null,
     platforms: room.level.platforms, doors: room.level.doors || [], spawn: room.level.spawn });
   broadcast(room.id, { type: 'system', text: `${p.username} entered.` });
   if (room.kind === 'run' && room.phase === 'idle') startWave(room);
@@ -161,10 +172,11 @@ function handle(p, m) {
     case 'fire': p.firing = !!m.down; break;
     case 'interact': tryInteract(p); break;
     case 'endRun': { const room = rooms.get(p.roomId); if (room && room.kind === 'run' && room.host === p.username) endRun(room, 'ended'); break; }
-    case 'createRun': createRun(p); break;
+    case 'createRun': createRun(p, m.diff | 0); break;
     case 'joinRun': joinRun(p, m.id); break;
     case 'listRuns': sendRunList(p); break;
     case 'chat': { let t = typeof m.text === 'string' ? m.text : ''; t = t.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, CHAT_MAX);
+      if (t[0] === '/') { handleCommand(p, t); break; }
       if (t) broadcast(p.roomId, { type: 'chat', from: p.username, color: p.color, text: t }); break; }
   }
 }
@@ -174,10 +186,33 @@ function doorUnder(p) { const room = rooms.get(p.roomId); if (!room || !room.lev
 function tryInteract(p) { const d = doorUnder(p); if (!d) return;
   if (d.type === 'leave') switchRoom(p, ensureLobby()); else if (d.type === 'run-browser') sendRunList(p); }
 function sendRunList(p) { const runs = [];
-  for (const r of rooms.values()) if (r.kind === 'run') runs.push({ id: r.id, host: r.host, count: r.players.size, cap: RUN_CAP, wave: r.wave });
+  for (const r of rooms.values()) if (r.kind === 'run') runs.push({ id: r.id, host: r.host, count: r.players.size, cap: RUN_CAP, wave: r.wave, diff: r.diff || 0, diffName: (DIFFS[r.diff] || DIFFS[1]).name });
   send(p, { type: 'runList', runs }); }
-function createRun(p) { const id = 'run:' + crypto.randomBytes(3).toString('hex');
-  const room = makeRoom(id, arenaLevel(0), { kind: 'run', host: p.username, arena: 0 }); switchRoom(p, room); }
+function createRun(p, diff) {
+  const d = DIFFS[diff] ? diff : 1, cfg = DIFFS[d];
+  const id = 'run:' + crypto.randomBytes(3).toString('hex');
+  const room = makeRoom(id, arenaLevel(0), { kind: 'run', host: p.username, arena: 0, diff: d,
+    speedMul: cfg.speed, countMul: cfg.count, hpAdd: cfg.hpAdd, bossMul: cfg.bossMul, scoreMul: cfg.score });
+  switchRoom(p, room);
+}
+// ---- admin commands (accounts listed in ADMIN_USERS) ----
+function handleCommand(p, text) {
+  const parts = text.slice(1).split(/\s+/), cmd = (parts[0] || '').toLowerCase(), arg = parts[1];
+  const say = (t) => send(p, { type: 'system', text: t });
+  if (!p.isAdmin) return say('Unknown command.');
+  const room = rooms.get(p.roomId), inRun = room && room.kind === 'run';
+  switch (cmd) {
+    case 'help': return say('admin: /skip · /wave N · /slag N · /heal · /god · /kill · /boss <maw|anvil|vesper|chorus|bore>');
+    case 'skip': if (!inRun) return say('Not in a run.'); room.foes.length = 0; room.foeShots.length = 0; room.quakes.length = 0; room.phase = 'fight'; startWave(room); return say('Skipped to wave ' + room.wave + '.');
+    case 'wave': { if (!inRun) return say('Not in a run.'); const n = Math.max(1, parseInt(arg, 10) || 1); room.foes.length = 0; room.foeShots.length = 0; room.quakes.length = 0; room.wave = n - 1; room.phase = 'fight'; startWave(room); return say('Jumped to wave ' + n + '.'); }
+    case 'slag': { const n = parseInt(arg, 10) || 0; db.bankRun(p.userId, n, 0).then((tot) => { if (tot) { p.slag = tot.slag; send(p, { type: 'progress', slag: tot.slag, bestWave: tot.bestWave }); } }).catch(() => {}); return say('+' + n + ' slag.'); }
+    case 'heal': p.hp = p.maxHp; p.dead = false; p.iframes = 40; return say('Healed.');
+    case 'god': p.god = !p.god; return say('God mode ' + (p.god ? 'ON' : 'OFF') + '.');
+    case 'kill': if (!inRun) return say('Not in a run.'); room.foes.length = 0; return say('Foes cleared.');
+    case 'boss': { if (!inRun) return say('Not in a run.'); if (!BOSSES[arg]) return say('Unknown boss.'); spawnBossOf(room, arg, Math.max(1, Math.ceil(room.wave / BOSS_EVERY)), false); return say('Spawned ' + BOSSES[arg].name + '.'); }
+    default: return say('Unknown command. Try /help.');
+  }
+}
 function joinRun(p, id) { const room = rooms.get(id);
   if (!room || room.kind !== 'run') return send(p, { type: 'system', text: 'That run no longer exists.' });
   if (room.players.size >= RUN_CAP) return send(p, { type: 'system', text: 'That run is full.' });
@@ -195,9 +230,10 @@ function startWave(room) {
   room.wave++;
   room.phase = 'fight';
   // revive anyone who died last wave
-  for (const uid of room.players) { const p = players.get(uid); if (p) { p.dead = false; p.hp = MAX_HP; p.iframes = 60; } }
+  for (const uid of room.players) { const p = players.get(uid); if (p) { p.dead = false; p.hp = p.maxHp; p.iframes = 60; } }
   if (room.wave % BOSS_EVERY === 0) { spawnBoss(room); return; }
-  const n = 3 + Math.floor(room.wave * 1.3);
+  const party = 1 + 0.4 * (room.players.size - 1);
+  const n = Math.max(1, Math.round((3 + Math.floor(room.wave * 1.3)) * (room.countMul || 1) * party));
   const kinds = ['drifter', 'spitter', 'diver'];
   for (let i = 0; i < n; i++) {
     const kind = kinds[Math.floor(Math.random() * (room.wave < 2 ? 1 : kinds.length))];
@@ -208,7 +244,7 @@ function startWave(room) {
 function makeFoe(room, kind, x, y) {
   const k = KINDS[kind];
   return { id: nextId++, kind, x, y, w: k.w, h: k.h, vx: 0, vy: 0,
-    hp: k.hp + Math.floor(room.wave / 3), t: Math.floor(rand(0, 60)), phase: 'in', cd: Math.floor(rand(40, 110)), hit: 0 };
+    hp: k.hp + Math.floor(room.wave / 3) + (room.hpAdd || 0), t: Math.floor(rand(0, 60)), phase: 'in', cd: Math.floor(rand(40, 110)), hit: 0 };
 }
 function spawnFoe(room, kind) {
   const LW = room.level.width, FT = room.level.floorTop, s = Math.random(); let x, y;
@@ -219,10 +255,14 @@ function spawnBoss(room) {
   const tier = Math.ceil(room.wave / BOSS_EVERY);
   const type = process.env.VS_FORCE_BOSS || (tier <= BOSS_ORDER.length ? BOSS_ORDER[(tier - 1) % BOSS_ORDER.length]
                                          : LATE_POOL[Math.floor(Math.random() * LATE_POOL.length)]);
-  const cfg = BOSSES[type], LW = room.level.width;
-  const hp = Math.round((84 + 82 * (tier - 1)) * cfg.hpMul);
+  spawnBossOf(room, type, tier, true);
+}
+function spawnBossOf(room, type, tier, announce) {
+  const cfg = BOSSES[type]; if (!cfg) return; const LW = room.level.width;
+  const party = 1 + 0.5 * (room.players.size - 1);
+  const hp = Math.round((84 + 82 * (Math.max(1, tier) - 1)) * cfg.hpMul * (room.bossMul || 1) * party);
   const base = () => ({ id: nextId++, kind: 'boss', boss: type, w: cfg.w, h: cfg.h, vx: 0, vy: 0,
-    hp, maxHp: hp, t: 0, phase: 'entry', pt: 0, charge: 0, volley: 0, hit: 0, tier });
+    hp, maxHp: hp, t: 0, phase: 'entry', pt: 0, charge: 0, volley: 0, hit: 0, tier: Math.max(1, tier) });
   if (type === 'chorus') {
     const mk = (role, twin, orbit, guard) => Object.assign(base(), { role, twin, orbit, guard,
       x: LW / 2 - cfg.w / 2 + (twin ? 40 : -40), y: -60, blade: 0, dive: 0, cycle: 0, guardX: 0, guardY: 1 });
@@ -234,12 +274,12 @@ function spawnBoss(room) {
     if (type === 'vesper') { f.blinkT = 0; f.blinkX = 0; f.blinkY = 0; f.aimX = 0; f.aimY = 1; }
     room.foes.push(f);
   }
-  broadcast(room.id, { type: 'wave', wave: room.wave, boss: cfg.name });
+  if (announce) broadcast(room.id, { type: 'wave', wave: room.wave, boss: cfg.name });
 }
 
 // ---- pattern emitters (Void Shell emit/lob) ----
 function emit(room, x, y, spec) {
-  const n = spec.n ?? 1, speed = spec.speed ?? 3, arc = spec.arc ?? TAU;
+  const sm = room.speedMul || 1, n = spec.n ?? 1, speed = (spec.speed ?? 3) * sm, arc = spec.arc ?? TAU;
   const ring = arc >= TAU - 0.001, base = spec.aim ? Math.atan2(spec.aim.y, spec.aim.x) : 0;
   const spin = spec.spin ?? 0, jitter = spec.jitter ?? 0;
   for (let i = 0; i < n; i++) {
@@ -249,8 +289,8 @@ function emit(room, x, y, spec) {
   }
 }
 function lob(room, x, y, spec) {
-  const n = spec.n ?? 1;
-  for (let i = 0; i < n; i++) room.foeShots.push({ x, y, vx: rand(-spec.spread, spec.spread), vy: -rand(spec.lift * 0.75, spec.lift), g: spec.g ?? 0.19, life: spec.life ?? 280, r: spec.r ?? 3.6 });
+  const sm = room.speedMul || 1, n = spec.n ?? 1, spread = spec.spread * sm, lift = spec.lift * sm;
+  for (let i = 0; i < n; i++) room.foeShots.push({ x, y, vx: rand(-spread, spread), vy: -rand(lift * 0.75, lift), g: spec.g ?? 0.19, life: spec.life ?? 280, r: spec.r ?? 3.6 });
 }
 
 // ---- foe AI ----
@@ -433,7 +473,7 @@ function damageFoe(room, f, amount, owner) {
   }
 }
 function hurtPlayer(p) {
-  if (p.dead || p.iframes > 0 || p.dashT > 0) return;
+  if (p.dead || p.god || p.iframes > 0 || p.dashT > 0) return;
   p.hp--; p.iframes = IFRAMES;
   if (p.hp <= 0) { p.dead = true; p.hp = 0; broadcast(p.roomId, { type: 'system', text: `${p.username} went down.` }); }
 }
@@ -448,7 +488,7 @@ function endRun(room, reason) {
   const wave = room.wave;
   for (const uid of [...room.players]) {
     const p = players.get(uid); if (!p) continue;
-    const earned = slagFor(p.score, p.bossKills);
+    const earned = Math.round(slagFor(p.score, p.bossKills) * (room.scoreMul || 1));
     const summary = { type: 'runEnd', reason, wave, score: p.score, kills: p.kills, bossKills: p.bossKills, slag: earned };
     db.bankRun(uid, earned, wave).then((tot) => {
       if (tot) { p.slag = tot.slag; p.bestWave = tot.bestWave; summary.total = tot.slag; summary.bestWave = tot.bestWave; }
@@ -504,7 +544,8 @@ function simulate() {
       // hit player cores
       let struck = false;
       for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead || p.iframes > 0 || p.dashT > 0) continue;
-        const cx = p.x + PW / 2, cy = p.y + PH / 2; if (Math.abs(b.x - cx) < CORE / 2 + b.r && Math.abs(b.y - cy) < CORE / 2 + b.r) { hurtPlayer(p); struck = true; break; } }
+        const bx = p.x + PW / 2 - CORE / 2, by = p.y + PH / 2 - CORE / 2;
+        if (b.x > bx && b.x < bx + CORE && b.y > by && b.y < by + CORE) { hurtPlayer(p); struck = true; break; } }
       if (!struck) fs.push(b);
     }
     room.foeShots = fs;
@@ -560,7 +601,7 @@ function broadcastStates() {
       const p = players.get(uid); if (!p || p.ws.readyState !== 1) continue;
       p.ws.send(JSON.stringify({ type: 'state', players: list, foes, fshots, pshots, quakes, wave: room.wave,
         you: { x: p.x, y: p.y, vx: p.vx, vy: p.vy, onGround: p.onGround, coyote: p.coyote, jumps: p.jumps,
-          face: p.face, dropThru: p.dropThru, buffer: p.buffer, pjump: p.pjump, hp: p.hp, dead: p.dead,
+          face: p.face, dropThru: p.dropThru, buffer: p.buffer, pjump: p.pjump, hp: p.hp, maxHp: p.maxHp, dead: p.dead,
           dashT: p.dashT, dashCd: p.dashCd, dashX: p.dashX, dashY: p.dashY, score: p.score, lastSeq: p.lastSeq } }));
     }
   }

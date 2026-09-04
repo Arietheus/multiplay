@@ -100,6 +100,10 @@
   .runrow .meta { color:var(--dim); font-size:12px; }
   .runrow button, .modal .primary.small { width:auto; padding:6px 14px; margin:0; }
   .createbar { display:flex; gap:8px; margin-top:8px; }
+  .difflist { display:flex; gap:6px; flex-wrap:wrap; }
+  .difflist button { flex:1; min-width:90px; padding:8px 6px; border-radius:3px; border:1px solid var(--stone-lit); background:var(--pit-lit); color:var(--dim); font-size:12px; }
+  .difflist button.sel { background:var(--sulfur); color:var(--pit); border-color:var(--sulfur); }
+  .runrow .depth { color:var(--sulfur); }
   .empty { color:var(--dim); font-size:13px; padding:10px 2px; }
 </style>
 </head>
@@ -142,6 +146,8 @@
     <div class="modal">
       <h2>RUNS <button id="closeRuns">×</button></h2>
       <div id="runlist"></div>
+      <h3>DEPTH</h3>
+      <div id="difflist" class="difflist"></div>
       <div class="createbar"><button id="createRun" class="primary small">Create a run</button><button id="refreshRuns" class="keybtn">Refresh</button></div>
     </div>
   </div>

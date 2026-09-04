@@ -37,8 +37,19 @@ public/game.js     Client: prediction/reconciliation, aim, Void Shell rendering
   it for everyone, banks each player's slag and best wave, and shows a postmortem
   summary before returning to the lobby (a party wipe does the same). Runs are
   entered through a **gate** in the centre of the lobby.
-- **Death screen** — going down shows a "you're down" banner while your team
-  fights on; you revive when the wave is cleared.
+- **Difficulty depths + party scaling** — the host picks a depth when creating a
+  run (Shallow / Working / Deep cut / Abyssal, from Void Shell), which sets your
+  max hearts (7/5/4/3), enemy count, projectile speed, enemy and boss health, and
+  the slag payout. On top of that, runs scale with party size: more players means
+  more and tougher enemies.
+- **Void Shell hitbox** — only a 7.5px core at your centre takes damage, and an
+  enemy shot must land its centre inside that box (no radius padding) — the exact,
+  forgiving hurtbox from the original.
+- **One session per account** — logging in again kicks the older connection
+  (which shows "Signed in from another tab"), so an account is only ever live once.
+- **Admin commands** — accounts listed in the `ADMIN_USERS` env var can type
+  commands in chat: `/skip`, `/wave N`, `/slag N`, `/heal`, `/god`, `/kill`,
+  `/boss <maw|anvil|vesper|chorus|bore>`, `/help`. Non-admins get "Unknown command".
 - **Palette + 5 skins** — the `C` palette (sulfur/ash/oxide/brine/bloom),
   switchable live in Options; the whole game repaints, sprites and chrome alike.
 - **Controls** — StarBreak-style: arrows move, ↑/↓ aim, **Space/F** jump, **D**

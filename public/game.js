@@ -90,7 +90,7 @@ function onMessage(m){ switch(m.type){
     $('btnEnd').classList.toggle('hidden', !(m.kind==='run' && youHost));
     $('bossbar').style.display='none'; closeRuns(); updateHud(); break;
   case 'state': onState(m); break;
-  case 'wave': waveNo=m.wave; $('wave').textContent = level && level.kind==='run' ? `WAVE ${m.wave}`+(m.boss?` · ${m.boss.toUpperCase()}`:'') : ''; if(m.boss)addSys(m.boss+' approaches.'); break;
+  case 'wave': waveNo=m.wave; $('wave').textContent = level && level.kind==='run' ? `WAVE ${m.wave}`+(level.diffName?` · ${level.diffName.toUpperCase()}`:'')+(m.boss?` · ${m.boss.toUpperCase()}`:'') : ''; if(m.boss)addSys(m.boss+' approaches.'); break;
   case 'runEnd': showPostmortem(m); break;
   case 'fx': shake(m.shake||0); break;
   case 'chat': addChat(m.from,m.text,m.color); break;
@@ -128,15 +128,15 @@ function onState(m){ const now=performance.now();
     self.x=y.x; self.y=y.y; self.vx=y.vx; self.vy=y.vy; self.onGround=y.onGround; self.coyote=y.coyote;
     self.jumps=y.jumps; self.face=y.face; self.dropThru=y.dropThru; self.buffer=y.buffer; self.pjump=y.pjump;
     self.dashT=y.dashT; self.dashCd=y.dashCd; if(y.dashX!==undefined){ self.dashX=y.dashX; self.dashY=y.dashY; }
-    selfHp=y.hp; dashCd=y.dashCd; myScore=y.score;
+    selfHp=y.hp; if(y.maxHp)myMaxHp=y.maxHp; dashCd=y.dashCd; myScore=y.score;
     pending=pending.filter(i=>i.seq>y.lastSeq);
     for(const i of pending) Physics.step(self,i.input,level);
   }
   updateHud();
 }
-let selfHp=5, selfDead=false, dashCd=0, myScore=0, mySlag=0, myBest=0, youHost=false;
-function updateHud(){ const h=$('hearts'); if(h.children.length!==5){ h.innerHTML=''; for(let i=0;i<5;i++){const d=document.createElement('div');d.className='h';h.appendChild(d);} }
-  for(let i=0;i<5;i++) h.children[i].classList.toggle('off', i>=selfHp);
+let selfHp=5, selfDead=false, dashCd=0, myScore=0, mySlag=0, myBest=0, youHost=false, myMaxHp=5;
+function updateHud(){ const h=$('hearts'); const mh=Math.max(1,myMaxHp||5); if(h.children.length!==mh){ h.innerHTML=''; for(let i=0;i<mh;i++){const d=document.createElement('div');d.className='h';h.appendChild(d);} }
+  for(let i=0;i<mh;i++) h.children[i].classList.toggle('off', i>=selfHp);
   const inRun = level && level.kind==='run';
   $('hearts').style.display = inRun?'flex':'none';
   $('stat').textContent = inRun?`SCORE ${myScore}`:'';
@@ -259,12 +259,15 @@ window.addEventListener('blur',clearHeld);
 // ---------- run browser + chat ----------
 function showRuns(runs){ const list=$('runlist'); list.innerHTML=''; if(!runs.length){ const e=document.createElement('div'); e.className='empty'; e.textContent='No open runs. Create one and friends can join.'; list.appendChild(e); }
   for(const r of runs){ const row=document.createElement('div'); row.className='runrow'; const meta=document.createElement('div');
-    const host=document.createElement('div'); host.textContent=`${r.host}'s run`; const sub=document.createElement('div'); sub.className='meta'; sub.textContent=`${r.count}/${r.cap} · wave ${r.wave}`;
+    const host=document.createElement('div'); host.textContent=`${r.host}'s run`; const sub=document.createElement('div'); sub.className='meta'; sub.innerHTML=`${r.count}/${r.cap} · wave ${r.wave} · <span class="depth">${r.diffName||'Working depth'}</span>`;
     meta.appendChild(host); meta.appendChild(sub); const btn=document.createElement('button'); btn.className='primary small'; btn.textContent=r.count>=r.cap?'Full':'Join'; btn.disabled=r.count>=r.cap;
     btn.onclick=()=>ws&&ws.send(JSON.stringify({type:'joinRun',id:r.id})); row.appendChild(meta); row.appendChild(btn); list.appendChild(row); }
-  $('runs').classList.remove('hidden'); }
+  renderDiffs(); $('runs').classList.remove('hidden'); }
+const DIFF_NAMES=['Shallow','Working depth','Deep cut','Abyssal']; let selDiff=1;
+function renderDiffs(){ const w=$('difflist'); if(!w)return; w.innerHTML='';
+  DIFF_NAMES.forEach((name,i)=>{ const b=document.createElement('button'); b.textContent=name; if(i===selDiff)b.classList.add('sel'); b.onclick=()=>{ selDiff=i; renderDiffs(); }; w.appendChild(b); }); }
 function closeRuns(){ $('runs').classList.add('hidden'); }
-$('closeRuns').onclick=closeRuns; $('createRun').onclick=()=>ws&&ws.send(JSON.stringify({type:'createRun'})); $('refreshRuns').onclick=()=>ws&&ws.send(JSON.stringify({type:'listRuns'}));
+$('closeRuns').onclick=closeRuns; $('createRun').onclick=()=>ws&&ws.send(JSON.stringify({type:'createRun',diff:selDiff})); $('refreshRuns').onclick=()=>ws&&ws.send(JSON.stringify({type:'listRuns'}));
 function scrollChat(){ const l=$('chatlog'); l.scrollTop=l.scrollHeight; }
 function addChat(from,text,color){ const line=document.createElement('div'); const n=document.createElement('span'); n.className='name'; n.style.color=color||'#fff'; n.textContent=from+': '; const b=document.createElement('span'); b.textContent=text; line.appendChild(n); line.appendChild(b); $('chatlog').appendChild(line); trimChat(); scrollChat(); }
 function addSys(text){ const l=document.createElement('div'); l.className='sys'; l.textContent=text; $('chatlog').appendChild(l); trimChat(); scrollChat(); }
