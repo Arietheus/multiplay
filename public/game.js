@@ -74,7 +74,7 @@ $('toggleMouse').onclick=()=>{ mouseAim=!mouseAim; localStorage.setItem('vs_mous
 // ---------- networking ----------
 let ws=null, connected=false, me=null, hidden=false;
 let level=null; const remotes=new Map();
-let foes=[], fshots=[], pshots=[], foesAt=0; let waveNo=0;
+let foeBuf=new Map(), fshots=[], pshots=[], foesAt=0; let waveNo=0;
 let self=null, inputSeq=0, pending=[];
 function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(`${proto}://${location.host}`);
   ws.onopen=()=>{connected=true;$('dot').classList.add('on');};
@@ -83,7 +83,7 @@ function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new 
   ws.onmessage=(ev)=>onMessage(JSON.parse(ev.data)); }
 function onMessage(m){ switch(m.type){
   case 'welcome': me=m.user; break;
-  case 'room': level=m; remotes.clear(); foes=[]; fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[];
+  case 'room': level=m; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[];
     $('stat').textContent = m.kind==='run'?'':''; $('bossbar').style.display='none'; closeRuns(); break;
   case 'state': onState(m); break;
   case 'wave': waveNo=m.wave; $('wave').textContent = level && level.kind==='run' ? `WAVE ${m.wave}`+(m.boss?` · ${m.boss.toUpperCase()}`:'') : ''; if(m.boss)addSys(m.boss+' approaches.'); break;
@@ -97,9 +97,16 @@ function onState(m){ const now=performance.now();
     r.color=p.color; r.name=p.name; r.hp=p.hp; r.dead=p.dead; r.iframes=p.iframes; r.aimx=p.aimx; r.aimy=p.aimy;
     r.buffer.push({t:now,x:p.x,y:p.y,face:p.face}); if(r.buffer.length>12)r.buffer.shift(); }
   for(const id of remotes.keys()) if(!seen.has(id)) remotes.delete(id);
-  foes=m.foes||[]; fshots=m.fshots||[]; pshots=m.pshots||[]; foesAt=now;
-  // boss bar
-  const boss=foes.find(f=>f.kind==='boss');
+  // foes -> per-id interpolation buffers (smooth motion between 30Hz snapshots)
+  const fseen=new Set();
+  for(const f of (m.foes||[])){ fseen.add(f.id);
+    let e=foeBuf.get(f.id); if(!e){ e={buf:[]}; foeBuf.set(f.id,e); }
+    e.kind=f.kind; e.boss=f.boss; e.w=f.w; e.h=f.h; e.hp=f.hp; e.maxHp=f.maxHp; e.hit=f.hit;
+    e.ph=f.ph; e.ch=f.ch; e.vx=f.vx; e.vy=f.vy; e.serverT=f.t; e.atMs=now;
+    e.buf.push({t:now,x:f.x,y:f.y}); if(e.buf.length>12)e.buf.shift(); }
+  for(const id of foeBuf.keys()) if(!fseen.has(id)) foeBuf.delete(id);
+  fshots=m.fshots||[]; pshots=m.pshots||[]; foesAt=now;
+  const boss=(m.foes||[]).find(f=>f.kind==='boss');
   if(boss){ $('bossbar').style.display='block'; $('bossname').textContent='BROOD MAW'; $('bossfill').style.width=Math.max(0,100*boss.hp/(boss.maxHp||1))+'%'; }
   else $('bossbar').style.display='none';
   // reconcile self
@@ -154,7 +161,7 @@ window.addEventListener('keydown',(e)=>{
   const a=CODE2ACTION[e.code]; if(!a) return; if(e.repeat) return;
   switch(a){
     case 'settings': $('controls').classList.contains('hidden')?openControls():closeControls(); break;
-    case 'chat': if(!chatOpen())openChat(); break;
+    case 'chat': if(!chatOpen()){ e.preventDefault(); openChat(); } break;
     case 'aimMode': mouseAim=!mouseAim; localStorage.setItem('vs_mouse',mouseAim?'1':'0'); break;
     case 'left': held.left=true; break;
     case 'right': held.right=true; break;
@@ -214,19 +221,113 @@ function drawPlayer(x,y,face,color,dead,iframes,aimx,aimy){
   ctx.beginPath(); ctx.moveTo(x+PW/2,y+PH/2); ctx.lineTo(x+PW/2+Math.cos(ca)*11,y+PH/2+Math.sin(ca)*11); ctx.stroke();
   ctx.globalAlpha=1;
 }
-function drawFoe(f){
-  const cx=f.x+f.w/2, cy=f.y+f.h/2; const flash=f.hit>0;
-  if(f.kind==='boss'){
-    ctx.fillStyle=flash?C.bone:C.ember; ctx.beginPath();
-    ctx.ellipse(cx,cy,f.w/2,f.h/2,0,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=C.pit; ctx.beginPath(); ctx.ellipse(cx,cy+6,f.w/2-10,f.h/3,0,0,Math.PI); ctx.fill(); // maw
-    ctx.fillStyle=C.sulfur; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.arc(cx+i*16,cy-8,3,0,Math.PI*2); ctx.fill(); }
-    return;
+// enemy colours read from the live palette so skins repaint them
+const FOE_KEY={drifter:'rust',spitter:'rust',diver:'ember',splitter:'rust',spawnling:'rust',lancer:'ember',warden:'rust',seeder:'rust',howler:'ember'};
+const centerOf=(f)=>({x:f.x+f.w/2,y:f.y+f.h/2});
+
+// --- enemy sprites, ported from Void Shell's drawFoes() ---
+function drawFoeVS(f){
+  if(f.kind==='boss') return drawMawVS(f);
+  const c=centerOf(f); const k={color:C[FOE_KEY[f.kind]]||C.rust}; const lit=f.hit>0;
+
+  if(f.kind==='drifter'){
+    const flap=Math.sin(f.t*0.34)*5;
+    ctx.strokeStyle=lit?C.bone:k.color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(c.x-3,c.y); ctx.lineTo(c.x-11,c.y-flap); ctx.moveTo(c.x+3,c.y); ctx.lineTo(c.x+11,c.y-flap); ctx.stroke();
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.ellipse(c.x,c.y,7,6,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=lit?C.bone:k.color; ctx.beginPath(); ctx.arc(c.x,c.y,2.4,0,Math.PI*2); ctx.fill();
   }
-  if(f.kind==='drifter'){ ctx.fillStyle=flash?C.bone:C.rust; ctx.beginPath(); ctx.moveTo(cx,f.y); ctx.lineTo(f.x+f.w,cy); ctx.lineTo(cx,f.y+f.h); ctx.lineTo(f.x,cy); ctx.closePath(); ctx.fill(); }
-  else if(f.kind==='spitter'){ ctx.fillStyle=flash?C.bone:C.rust; ctx.fillRect(f.x,f.y,f.w,f.h); ctx.fillStyle=C.sulfur; ctx.fillRect(cx-2,cy-2,4,4); }
-  else if(f.kind==='diver'){ ctx.fillStyle=flash?C.bone:C.ember; ctx.save(); ctx.translate(cx,cy); ctx.rotate(Math.atan2(f.vy||0,f.vx||1)); ctx.beginPath(); ctx.moveTo(f.w/2,0); ctx.lineTo(-f.w/2,-f.h/2); ctx.lineTo(-f.w/2,f.h/2); ctx.closePath(); ctx.fill(); ctx.restore(); }
-  else { ctx.fillStyle=C.rust; ctx.fillRect(f.x,f.y,f.w,f.h); }
+  if(f.kind==='spitter'){
+    const swell=f.charge>0?1+(28-f.charge)/40:1;
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.ellipse(c.x,c.y,9.5*swell,8*swell,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=lit?C.bone:k.color; ctx.globalAlpha=f.charge>0?1:0.75; ctx.beginPath(); ctx.arc(c.x,c.y,3.4*swell,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    ctx.strokeStyle=lit?C.bone:k.color; ctx.lineWidth=1.5;
+    for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(c.x+i*4,c.y+6); ctx.lineTo(c.x+i*6,c.y+12+Math.sin(f.t*0.14+i)*2); ctx.stroke(); }
+  }
+  if(f.kind==='splitter'){
+    const squirm=Math.sin(f.t*0.06)*0.05;
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.ellipse(c.x,c.y,10.5*(1+squirm),9.5*(1-squirm),0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=lit?C.bone:k.color; ctx.globalAlpha=0.85;
+    for(let i=0;i<3;i++){ const a=(i/3)*Math.PI*2+f.t*0.05; ctx.beginPath(); ctx.arc(c.x+Math.cos(a)*4.2,c.y+Math.sin(a)*3.6,2.1,0,Math.PI*2); ctx.fill(); }
+    ctx.globalAlpha=1; ctx.strokeStyle=lit?C.bone:k.color; ctx.lineWidth=1.4; ctx.beginPath(); ctx.ellipse(c.x,c.y,10.5,9.5,0,0,Math.PI*2); ctx.stroke();
+  }
+  if(f.kind==='spawnling'){
+    const ang=Math.atan2(f.vy,f.vx); ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(ang);
+    ctx.fillStyle=lit?C.bone:k.color; ctx.beginPath(); ctx.moveTo(5,0); ctx.lineTo(-4,-3.2); ctx.lineTo(-4,3.2); ctx.closePath(); ctx.fill(); ctx.restore();
+  }
+  if(f.kind==='lancer'){
+    if(f.charge>0){ ctx.strokeStyle=C.ember; ctx.globalAlpha=0.28+(34-f.charge)/60; ctx.lineWidth=1.4; ctx.setLineDash([5,5]);
+      ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(c.x+(f.aimX||1)*460,c.y+(f.aimY||0)*460); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha=1; }
+    const face=f.aimX!==undefined&&f.charge>0?Math.atan2(f.aimY,f.aimX):(f.vx<0?Math.PI:0);
+    ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(face);
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.moveTo(13,0); ctx.lineTo(-2,-6); ctx.lineTo(-10,-3); ctx.lineTo(-10,3); ctx.lineTo(-2,6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=f.charge>0&&Math.floor(f.charge/3)%2===0?C.bone:k.color; ctx.beginPath(); ctx.arc(4,0,2.6,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+  if(f.kind==='warden'){
+    const ga=Math.atan2(f.guardY||0,f.guardX||1);
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.ellipse(c.x,c.y,10,9.5,0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=lit?C.bone:k.color; ctx.lineWidth=5; ctx.beginPath(); ctx.arc(c.x,c.y,15,ga-0.85,ga+0.85); ctx.stroke();
+    ctx.fillStyle=C.ember; ctx.beginPath(); ctx.arc(c.x-Math.cos(ga)*4,c.y-Math.sin(ga)*4,2.4,0,Math.PI*2); ctx.fill();
+  }
+  if(f.kind==='seeder'){
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.ellipse(c.x,c.y-2,10,8.5,0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=lit?C.bone:C.ember; ctx.lineWidth=2;
+    for(let i=-1;i<=1;i++){ const sway=Math.sin(f.t*0.08+i)*2.5; ctx.beginPath(); ctx.moveTo(c.x+i*5,c.y+5); ctx.lineTo(c.x+i*5+sway,c.y+13); ctx.stroke(); }
+    const swell=1+Math.sin(f.t*0.065)*0.25; ctx.fillStyle=C.ember; ctx.beginPath(); ctx.arc(c.x,c.y+14,3*swell,0,Math.PI*2); ctx.fill();
+  }
+  if(f.kind==='howler'){
+    const pulse=1+Math.sin(f.t*0.16)*0.14; ctx.strokeStyle=lit?C.bone:k.color; ctx.lineWidth=2;
+    for(let i=0;i<8;i++){ const a=(i/8)*Math.PI*2+f.t*0.03; ctx.beginPath(); ctx.moveTo(c.x+Math.cos(a)*6,c.y+Math.sin(a)*6); ctx.lineTo(c.x+Math.cos(a)*12*pulse,c.y+Math.sin(a)*12*pulse); ctx.stroke(); }
+    ctx.fillStyle=lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.arc(c.x,c.y,6.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=k.color; ctx.beginPath(); ctx.arc(c.x,c.y,3*pulse,0,Math.PI*2); ctx.fill();
+  }
+  if(f.kind==='diver'){
+    const tell=f.phase==='tell'&&Math.floor(f.charge/3)%2===0;
+    const ang=f.phase==='dive'?Math.atan2(f.vy,f.vx):0;
+    ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(ang);
+    ctx.fillStyle=tell||lit?C.bone:C.stoneLit; ctx.beginPath(); ctx.moveTo(10,0); ctx.lineTo(-7,-6); ctx.lineTo(-4,0); ctx.lineTo(-7,6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=tell?C.bone:k.color; ctx.beginPath(); ctx.arc(3,0,2.2,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+}
+
+// --- the brood maw, ported from Void Shell's drawMaw() ---
+function drawMawVS(f){
+  const c=centerOf(f); const lit=f.hit>0;
+  const winding=f.charge>0&&f.phase!=='entry'&&f.phase!=='hover';
+  const tell=winding&&Math.floor(f.charge/3)%2===0;
+  const pulse=1+Math.sin(f.t*0.06)*0.035; const flap=Math.sin(f.t*0.07)*11;
+  ctx.strokeStyle=lit?C.bone:C.stoneLit; ctx.lineWidth=4; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(c.x-f.w*0.3,c.y); ctx.lineTo(c.x-f.w*0.72,c.y-14-flap);
+  ctx.moveTo(c.x-f.w*0.3,c.y+4); ctx.lineTo(c.x-f.w*0.6,c.y+16+flap*0.4);
+  ctx.moveTo(c.x+f.w*0.3,c.y); ctx.lineTo(c.x+f.w*0.72,c.y-14-flap);
+  ctx.moveTo(c.x+f.w*0.3,c.y+4); ctx.lineTo(c.x+f.w*0.6,c.y+16+flap*0.4);
+  ctx.stroke();
+  ctx.fillStyle=lit?C.bone:C.stone; ctx.beginPath(); ctx.ellipse(c.x,c.y,(f.w/2)*pulse,(f.h/2)*pulse,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=tell?C.ember:C.stoneLit; ctx.lineWidth=2; ctx.stroke();
+  const pods=7;
+  for(let i=0;i<pods;i++){ const a=(i/pods)*Math.PI*2+f.t*0.012; const px=c.x+Math.cos(a)*f.w*0.3; const py=c.y+Math.sin(a)*f.h*0.31;
+    ctx.fillStyle=f.phase==='brood'?C.rust:C.ember; ctx.globalAlpha=0.5+Math.sin(f.t*0.1+i)*0.4; ctx.beginPath(); ctx.arc(px,py,3.1,0,Math.PI*2); ctx.fill(); }
+  ctx.globalAlpha=1;
+  const swell=winding?(34-f.charge)/5:0;
+  ctx.fillStyle=tell?C.ember:C.sulfur; ctx.beginPath(); ctx.arc(c.x,c.y,7+swell,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=C.pit; ctx.beginPath(); ctx.arc(c.x,c.y,2.6,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=lit?C.bone:C.stoneLit; ctx.lineWidth=3; const gape=f.phase==='slam'?7:3;
+  ctx.beginPath(); ctx.moveTo(c.x-12,c.y+f.h*0.4); ctx.lineTo(c.x-6-gape,c.y+f.h*0.62); ctx.moveTo(c.x+12,c.y+f.h*0.4); ctx.lineTo(c.x+6+gape,c.y+f.h*0.62); ctx.stroke();
+}
+
+// --- projectiles, ported from Void Shell's drawFoeShots() ---
+function drawFoeShotVS(x,y,r,color){
+  const rr=(r||2.6)+0.9;
+  ctx.fillStyle=C.pit; ctx.globalAlpha=0.92; ctx.beginPath(); ctx.arc(x,y,rr+2.3,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  ctx.fillStyle=color||C.rust; ctx.beginPath(); ctx.arc(x,y,rr,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=C.bone; ctx.beginPath(); ctx.arc(x,y,Math.max(1.1,rr*0.42),0,Math.PI*2); ctx.fill();
+}
+function drawBolt(x,y,vx,vy,color){
+  const l=Math.hypot(vx||0,vy||1)||1, ux=(vx||0)/l, uy=(vy||1)/l;
+  ctx.strokeStyle=color||C.sulfur; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x-ux*5,y-uy*5); ctx.lineTo(x+ux*3,y+uy*3); ctx.stroke();
+  ctx.fillStyle=C.bone; ctx.beginPath(); ctx.arc(x+ux*3,y+uy*3,1.6,0,Math.PI*2); ctx.fill();
 }
 
 function draw(){
@@ -243,13 +344,18 @@ function draw(){
     ctx.fillStyle=C.sulfur; ctx.font='11px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(d.label,d.x+d.w/2,d.y-6); }
   let promptDoor=null; for(const d of (level.doors||[])) if(self.x<d.x+d.w&&self.x+PW>d.x&&self.y<d.y+d.h&&self.y+PH>d.y) promptDoor=d;
 
-  // player bullets
-  for(const b of pshots){ ctx.fillStyle=b.color||C.sulfur; ctx.beginPath(); ctx.arc(b.x,b.y,2.4,0,Math.PI*2); ctx.fill(); }
-  // foes
-  for(const f of foes) drawFoe(f);
-  // foe shots (bullet-hell) with slight extrapolation
-  const dt=(now-foesAt)/1000;
-  for(const b of fshots){ ctx.fillStyle=C.rust; ctx.beginPath(); ctx.arc(b.x,b.y,b.r||3,0,Math.PI*2); ctx.fill(); ctx.fillStyle='rgba(214,198,60,0.5)'; ctx.beginPath(); ctx.arc(b.x,b.y,(b.r||3)*0.5,0,Math.PI*2); ctx.fill(); }
+  const TICK=1000/60;
+  const sclamp=Math.min(Math.max((now-foesAt)/TICK,0),4);
+  // foes — extrapolated forward from the last 30Hz snapshot for smooth 60fps motion
+  for(const [,e] of foeBuf){ const last=e.buf[e.buf.length-1]; if(!last)continue;
+    const et=Math.min(Math.max((now-e.atMs)/TICK,0),3);
+    const ef={kind:e.kind,boss:e.boss,w:e.w,h:e.h,hit:e.hit,phase:e.ph,charge:e.ch,vx:e.vx,vy:e.vy,
+      x:last.x+(e.vx||0)*et, y:last.y+(e.vy||0)*et, t:(e.serverT||0)+et};
+    drawFoeVS(ef); }
+  // foe shots — extrapolated (with gravity for lobs), Void Shell bullet look
+  for(const b of fshots){ const bx=b.x+(b.vx||0)*sclamp, by=b.y+(b.vy||0)*sclamp+(b.g?0.5*b.g*sclamp*sclamp:0); drawFoeShotVS(bx,by,b.r,b.color); }
+  // player bullets — extrapolated bolts
+  for(const b of pshots){ const bx=b.x+(b.vx||0)*sclamp, by=b.y+(b.vy||0)*sclamp; drawBolt(bx,by,b.vx,b.vy,b.color); }
   // remotes
   const rt=now-100;
   for(const [,r] of remotes){ const s=remoteAt(r,rt); if(!s)continue; drawPlayer(s.x,s.y,s.face,r.color,r.dead,r.iframes,s.face,0); ctx.fillStyle=C.bone; ctx.font='10px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(r.name||'',s.x+PW/2,s.y-6); }

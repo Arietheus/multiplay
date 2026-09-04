@@ -382,9 +382,12 @@ function broadcastStates() {
       id: p.userId, name: p.username, color: p.color, x: Math.round(p.x), y: Math.round(p.y),
       face: p.face, hp: p.hp, dead: p.dead, iframes: p.iframes, aimx: +p.aim.x.toFixed(2), aimy: +p.aim.y.toFixed(2) }; }).filter(Boolean);
     const foes = room.foes.map((f) => ({ id: f.id, kind: f.kind, boss: f.boss || null, x: Math.round(f.x), y: Math.round(f.y),
-      w: f.w, h: f.h, hp: f.hp, maxHp: f.maxHp || 0, hit: f.hit || 0 }));
-    const fshots = room.foeShots.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), r: b.r }));
-    const pshots = room.pBullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), color: b.color }));
+      w: f.w, h: f.h, hp: f.hp, maxHp: f.maxHp || 0, hit: f.hit || 0,
+      t: f.t || 0, ph: f.phase || '', ch: f.charge || 0, vx: +(f.vx || 0).toFixed(2), vy: +(f.vy || 0).toFixed(2) }));
+    const fshots = room.foeShots.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), r: b.r,
+      vx: +b.vx.toFixed(2), vy: +b.vy.toFixed(2), g: b.g || 0 }));
+    const pshots = room.pBullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), color: b.color,
+      vx: +b.vx.toFixed(2), vy: +b.vy.toFixed(2) }));
     for (const uid of room.players) {
       const p = players.get(uid); if (!p || p.ws.readyState !== 1) continue;
       p.ws.send(JSON.stringify({ type: 'state', players: list, foes, fshots, pshots, wave: room.wave,
