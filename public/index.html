@@ -43,6 +43,19 @@
   #dot { width:9px; height:9px; border-radius:50%; background:var(--ember); box-shadow:0 0 8px currentColor; color:var(--ember); }
   #dot.on { background:var(--mint); color:var(--mint); }
   #stat { color:var(--dim); font-size:13px; }
+  .slag { color:var(--sulfur); font-size:13px; letter-spacing:1px; }
+  #topright button#btnEnd { background:var(--ember); color:var(--bone); }
+  #topright button#btnEnd:hover { background:#c04a63; }
+  #death { background:transparent; pointer-events:none; align-items:flex-start; padding-top:14vh; }
+  .modal.death { text-align:center; border-left-color:var(--ember); background:rgba(44,53,49,.85); }
+  .modal h2.downed { color:var(--ember); justify-content:center; letter-spacing:3px; }
+  .modal .sub { color:var(--dim); font-size:13px; margin-top:4px; }
+  .pmgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:16px 0; }
+  .pmgrid .cell { background:var(--pit-lit); border-radius:3px; padding:12px 6px; text-align:center; }
+  .pmgrid .cell b { display:block; font-size:22px; color:var(--bone); }
+  .pmgrid .cell.record b { color:var(--sulfur); }
+  .pmgrid .cell span { font-size:10px; letter-spacing:1px; color:var(--dim); }
+  .pmslag { text-align:center; color:var(--sulfur); font-size:15px; letter-spacing:1px; min-height:20px; }
   #topright { position:fixed; top:12px; right:14px; z-index:20; display:flex; gap:8px; }
   #topright button { padding:6px 12px; border-radius:3px; border:none; background:var(--stone); color:var(--bone); }
   #topright button:hover { background:var(--stone-lit); }
@@ -106,9 +119,9 @@
 
   <div id="game" class="hidden">
     <canvas id="c"></canvas>
-    <div id="hud"><span id="dot"></span><div id="hearts"></div><span id="stat"></span></div>
+    <div id="hud"><span id="dot"></span><div id="hearts"></div><span id="stat"></span><span id="slag" class="slag"></span></div>
     <div id="wave"></div>
-    <div id="topright"><button id="btnControls">Options</button><button id="btnLogout">Log out</button></div>
+    <div id="topright"><button id="btnEnd" class="hidden">End run</button><button id="btnControls">Options</button><button id="btnLogout">Log out</button></div>
     <div id="prompt" class="hidden"></div>
     <div id="bossbar"><div class="name" id="bossname"></div><div class="track"><div class="fill" id="bossfill"></div></div></div>
     <div id="chat"><div id="chatlog"></div><form id="chatform" class="hidden" autocomplete="off"><input id="chatinput" maxlength="200" placeholder="say something…" /></form></div>
@@ -130,6 +143,23 @@
       <h2>RUNS <button id="closeRuns">×</button></h2>
       <div id="runlist"></div>
       <div class="createbar"><button id="createRun" class="primary small">Create a run</button><button id="refreshRuns" class="keybtn">Refresh</button></div>
+    </div>
+  </div>
+
+  <div id="death" class="overlay hidden">
+    <div class="modal death">
+      <h2 class="downed">YOU ARE DOWN</h2>
+      <p id="deathline" class="sub"></p>
+    </div>
+  </div>
+
+  <div id="postmortem" class="overlay hidden">
+    <div class="modal">
+      <h2 id="pmtitle">RUN OVER</h2>
+      <p id="pmsub" class="sub"></p>
+      <div id="pmstats" class="pmgrid"></div>
+      <div id="pmslag" class="pmslag"></div>
+      <button id="pmclose" class="primary small" style="margin-top:14px;">Back to the lobby</button>
     </div>
   </div>
 

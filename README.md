@@ -29,6 +29,16 @@ public/game.js     Client: prediction/reconciliation, aim, Void Shell rendering
   feel instant. Enemies and enemy bullets are extrapolated between snapshots for
   smooth 60fps motion. Screen **shake** and particle **bursts** (both copied from
   Void Shell) fire on hits, dashes, and kills.
+- **Scrolling worlds** — the lobby and arenas are large; a zoomed-in camera
+  follows the player and clamps to the world edges.
+- **Slag currency** — earn Void Shell's slag (`floor(score/130) + bosses×6`),
+  banked to your account when a run ends; your total and best wave persist.
+- **Host controls + save** — the run's host gets an **End run** button that ends
+  it for everyone, banks each player's slag and best wave, and shows a postmortem
+  summary before returning to the lobby (a party wipe does the same). Runs are
+  entered through a **gate** in the centre of the lobby.
+- **Death screen** — going down shows a "you're down" banner while your team
+  fights on; you revive when the wave is cleared.
 - **Palette + 5 skins** — the `C` palette (sulfur/ash/oxide/brine/bloom),
   switchable live in Options; the whole game repaints, sprites and chrome alike.
 - **Controls** — StarBreak-style: arrows move, ↑/↓ aim, **Space/F** jump, **D**
@@ -39,8 +49,14 @@ public/game.js     Client: prediction/reconciliation, aim, Void Shell rendering
 - **Pattern system** — the `emit()` (rings/fans) and `lob()` (arced) emitters, so
   every hostile pattern is a description, not a hand-rolled loop.
 - **Enemies** — drifter, spitter, diver, with the wave/tier structure.
-- **Boss** — the **brood maw**: entry descent → hover-sweep → barrage / brood /
-  slam, enraging under 40% HP. Appears every 5th wave.
+- **Bosses** — five, on Void Shell's rotation (tier = every 5th wave): the
+  **brood maw** (barrage / brood / slam), **the anvil** (a ground bruiser that
+  hammers shockwaves down the floor, leaps, vents drifters and charges), **vesper**
+  (blinks around you, paints a firing line, sweeps a burning trail), **the chorus**
+  (sword + shield twins orbiting a shared hub — the shield only opens when its
+  guard drops, and the survivor enrages), and **the bore** (tunnels off-screen,
+  telegraphs a lane, then streaks through it — only vulnerable mid-dive). Each
+  boss's AI and sprite are ported from the source.
 
 ## 1. Database (Neon — free, persistent)
 

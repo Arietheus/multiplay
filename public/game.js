@@ -74,7 +74,8 @@ $('toggleMouse').onclick=()=>{ mouseAim=!mouseAim; localStorage.setItem('vs_mous
 // ---------- networking ----------
 let ws=null, connected=false, me=null, hidden=false;
 let level=null; const remotes=new Map();
-let foeBuf=new Map(), fshots=[], pshots=[], foesAt=0; let waveNo=0;
+let foeBuf=new Map(), fshots=[], pshots=[], quakes=[], foesAt=0; let waveNo=0;
+const BOSS_NAMES={maw:'BROOD MAW',anvil:'THE ANVIL',vesper:'VESPER',chorus:'THE CHORUS',bore:'THE BORE'};
 let self=null, inputSeq=0, pending=[];
 function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(`${proto}://${location.host}`);
   ws.onopen=()=>{connected=true;$('dot').classList.add('on');};
@@ -83,10 +84,15 @@ function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new 
   ws.onmessage=(ev)=>onMessage(JSON.parse(ev.data)); }
 function onMessage(m){ switch(m.type){
   case 'welcome': me=m.user; break;
-  case 'room': level=m; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[]; myShots=[]; bits=[]; shakeAmt=0;
-    $('stat').textContent = m.kind==='run'?'':''; $('bossbar').style.display='none'; closeRuns(); break;
+  case 'progress': mySlag=m.slag; myBest=m.bestWave; updateHud(); break;
+  case 'room': level=m; youHost=!!m.youHost; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[]; myShots=[]; bits=[]; shakeAmt=0;
+    selfDead=false; $('death').classList.add('hidden');
+    $('btnEnd').classList.toggle('hidden', !(m.kind==='run' && youHost));
+    $('bossbar').style.display='none'; closeRuns(); updateHud(); break;
   case 'state': onState(m); break;
   case 'wave': waveNo=m.wave; $('wave').textContent = level && level.kind==='run' ? `WAVE ${m.wave}`+(m.boss?` · ${m.boss.toUpperCase()}`:'') : ''; if(m.boss)addSys(m.boss+' approaches.'); break;
+  case 'runEnd': showPostmortem(m); break;
+  case 'fx': shake(m.shake||0); break;
   case 'chat': addChat(m.from,m.text,m.color); break;
   case 'system': addSys(m.text); break;
   case 'runList': showRuns(m.runs); break; } }
@@ -103,13 +109,16 @@ function onState(m){ const now=performance.now();
     let e=foeBuf.get(f.id); if(!e){ e={buf:[]}; foeBuf.set(f.id,e); }
     e.kind=f.kind; e.boss=f.boss; e.w=f.w; e.h=f.h; e.hp=f.hp; e.maxHp=f.maxHp; e.hit=f.hit;
     e.ph=f.ph; e.ch=f.ch; e.vx=f.vx; e.vy=f.vy; e.serverT=f.t; e.atMs=now;
+    if(f.kind==='boss') Object.assign(e,{role:f.role,guard:f.guard,airborne:f.airborne,armored:f.armored,blade:f.blade,twin:f.twin,blinkT:f.blinkT,bx:f.bx,by:f.by,ax:f.ax,ay:f.ay,gx:f.gx,gy:f.gy,fx:f.fx,fy:f.fy,tr:f.tr});
     e.buf.push({t:now,x:f.x,y:f.y}); if(e.buf.length>12)e.buf.shift(); }
   for(const id of foeBuf.keys()) if(!fseen.has(id)){ const e=foeBuf.get(id); const last=e.buf[e.buf.length-1];
     if(last){ if(e.boss){ shake(12); burst(last.x+e.w/2,last.y+e.h/2,30,C.ember,4.2,38); } else burst(last.x+(e.w||8)/2,last.y+(e.h||8)/2,10,C.bone,3,22); }
     foeBuf.delete(id); }
-  fshots=m.fshots||[]; pshots=m.pshots||[]; foesAt=now;
-  const boss=(m.foes||[]).find(f=>f.kind==='boss');
-  if(boss){ $('bossbar').style.display='block'; $('bossname').textContent='BROOD MAW'; $('bossfill').style.width=Math.max(0,100*boss.hp/(boss.maxHp||1))+'%'; }
+  fshots=m.fshots||[]; pshots=m.pshots||[]; quakes=m.quakes||[]; foesAt=now;
+  const bosses=(m.foes||[]).filter(f=>f.kind==='boss');
+  if(bosses.length){ $('bossbar').style.display='block'; $('bossname').textContent=BOSS_NAMES[bosses[0].boss]||'BOSS';
+    const hp=bosses.reduce((s,b)=>s+b.hp,0), mx=bosses.reduce((s,b)=>s+(b.maxHp||1),0);
+    $('bossfill').style.width=Math.max(0,100*hp/mx)+'%'; }
   else $('bossbar').style.display='none';
   // reconcile self
   if(m.you && self && level){
@@ -125,18 +134,38 @@ function onState(m){ const now=performance.now();
   }
   updateHud();
 }
-let selfHp=5, selfDead=false, dashCd=0, myScore=0;
+let selfHp=5, selfDead=false, dashCd=0, myScore=0, mySlag=0, myBest=0, youHost=false;
 function updateHud(){ const h=$('hearts'); if(h.children.length!==5){ h.innerHTML=''; for(let i=0;i<5;i++){const d=document.createElement('div');d.className='h';h.appendChild(d);} }
   for(let i=0;i<5;i++) h.children[i].classList.toggle('off', i>=selfHp);
-  $('hearts').style.display = (level&&level.kind==='run')?'flex':'none';
-  $('stat').textContent = (level&&level.kind==='run')?`SCORE ${myScore}`:''; }
+  const inRun = level && level.kind==='run';
+  $('hearts').style.display = inRun?'flex':'none';
+  $('stat').textContent = inRun?`SCORE ${myScore}`:'';
+  $('slag').textContent = `${mySlag} ◆`;
+  // personal death overlay (you're down but the party fights on)
+  const down = inRun && selfDead;
+  $('death').classList.toggle('hidden', !down);
+  if(down) $('deathline').textContent = 'Hold on — you revive when the wave is cleared.';
+}
+// run-end postmortem (Void Shell style summary)
+function showPostmortem(m){
+  shake(16); if(self) burst(self.x+PW/2,self.y+PH/2,30,C.bone,5,40);
+  $('pmtitle').textContent = m.reason==='ended' ? 'RUN BANKED' : 'RUN OVER';
+  $('pmsub').textContent = m.reason==='ended' ? 'The host closed the gate. Your haul is saved.' : 'The party fell. What you earned is saved.';
+  const rec = m.bestWave!==undefined && m.wave>=m.bestWave;
+  const stats=[['wave',m.wave],['score',m.score],['kills',m.kills],['bosses',m.bossKills],['best',m.bestWave??'—']];
+  const grid=$('pmstats'); grid.innerHTML='';
+  for(const [label,val] of stats){ const c=document.createElement('div'); c.className='cell'+(label==='wave'&&rec?' record':''); const b=document.createElement('b'); b.textContent=val; const s=document.createElement('span'); s.textContent=label; c.appendChild(b); c.appendChild(s); grid.appendChild(c); }
+  $('pmslag').innerHTML = m.slag>0 ? `+${m.slag} slag ◆ &nbsp;·&nbsp; ${m.total??mySlag} total` : 'no slag earned this run';
+  $('postmortem').classList.remove('hidden');
+}
+$('pmclose').onclick=()=>$('postmortem').classList.add('hidden');
+$('btnEnd').onclick=()=>{ if(ws&&connected&&confirm('End the run for everyone and bank your slag?')) ws.send(JSON.stringify({type:'endRun'})); };
 
 // ---------- input ----------
 const held={left:false,right:false,jump:false,aimUp:false,aimDown:false};
 let firing=false, mouseAim=localStorage.getItem('vs_mouse')==='1';
-const mouse={x:W2(),y:H2()}; let lastAim={x:1,y:0};
-function W2(){return 380;} function H2(){return 220;}
-function uiBlocking(){ return chatOpen() || !$('controls').classList.contains('hidden') || !$('runs').classList.contains('hidden'); }
+const mouse={x:400,y:300}; let lastAim={x:1,y:0};
+function uiBlocking(){ return chatOpen() || !$('controls').classList.contains('hidden') || !$('runs').classList.contains('hidden') || !$('postmortem').classList.contains('hidden'); }
 function clearHeld(){ held.left=held.right=held.jump=held.aimUp=held.aimDown=false; firing=false; sendInput(); sendFire(false); }
 function chatOpen(){ return !$('chatform').classList.contains('hidden'); }
 function openChat(){ $('chatform').classList.remove('hidden'); $('chatinput').focus(); clearHeld(); }
@@ -145,7 +174,7 @@ $('chatform').addEventListener('submit',e=>{ e.preventDefault(); const t=$('chat
 $('chatinput').addEventListener('keydown',e=>{ if(e.key==='Escape'){e.preventDefault();closeChat();} });
 
 function computeAim(){ // returns normalized aim in game space
-  if(mouseAim && self){ const cx=self.x+Physics.PW/2, cy=self.y+Physics.PH/2; let dx=mouse.x-cx, dy=mouse.y-cy; const l=Math.hypot(dx,dy)||1; return {x:dx/l,y:dy/l}; }
+  if(mouseAim && self){ const wx=camX+mouse.x/zoom, wy=camY+mouse.y/zoom; let dx=wx-(self.x+Physics.PW/2), dy=wy-(self.y+Physics.PH/2); const l=Math.hypot(dx,dy)||1; return {x:dx/l,y:dy/l}; }
   let ax=(held.left?-1:0)+(held.right?1:0); let ay=(held.aimUp?-1:0)+(held.aimDown?1:0);
   if(ax===0&&ay===0){ ax=self?self.face:1; } else if(ay<0&&ax===0){ ax=self?self.face:1; }
   const l=Math.hypot(ax,ay)||1; return {x:ax/l,y:ay/l};
@@ -171,7 +200,11 @@ function predictFire(blocked){
     const a=computeAim(); myShots.push({x:self.x+PW/2+a.x*7,y:self.y+PH/2+a.y*7,vx:a.x*8.4,vy:a.y*8.4,life:64}); myFireCd=7;
   }
   for(const s of myShots){ s.x+=s.vx; s.y+=s.vy; s.life--; }
-  myShots=myShots.filter(s=> s.life>0 && s.x>-10&&s.x<W+10&&s.y>-10&&s.y<H+10 && !shotHitsSolid(s));
+  myShots=myShots.filter(s=>{
+    if(s.life<=0 || s.x<-10||s.x>level.width+10||s.y<-10||s.y>level.height+10 || shotHitsSolid(s)) return false;
+    for(const [,e] of foeBuf){ const last=e.buf[e.buf.length-1]; if(!last)continue;
+      if(s.x>last.x&&s.x<last.x+e.w&&s.y>last.y&&s.y<last.y+e.h){ burst(s.x,s.y,4,C.bone,1.6,12); return false; } }
+    return true; });
 }
 
 // Sampled every tick by a fixed 60Hz loop (see startGame): reads currently-held
@@ -217,7 +250,7 @@ window.addEventListener('keyup',(e)=>{ const a=CODE2ACTION[e.code]; if(!a)return
   else if(a==='aimDown'){held.aimDown=false;} else if(a==='fire'){firing=false;sendFire(false);} });
 
 const canvas=$('c'); const ctx=canvas.getContext('2d');
-canvas.addEventListener('mousemove',e=>{ const r=canvas.getBoundingClientRect(); const sx=(e.clientX-r.left-ox)/scale, sy=(e.clientY-r.top-oy)/scale; mouse.x=sx; mouse.y=sy; });
+canvas.addEventListener('mousemove',e=>{ const r=canvas.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; });
 canvas.addEventListener('mousedown',e=>{ if(e.button===0&&!uiBlocking()&&!firing){firing=true;sendFire(true);} });
 window.addEventListener('mouseup',()=>{ if(firing){firing=false;sendFire(false);} });
 document.addEventListener('visibilitychange',()=>{ if(document.hidden){hidden=true;clearHeld();} else {hidden=false; if(!connected)connect();} });
@@ -238,9 +271,9 @@ function addSys(text){ const l=document.createElement('div'); l.className='sys';
 function trimChat(){ const l=$('chatlog'); while(l.children.length>50)l.removeChild(l.firstChild); }
 
 // ---------- render (760x440 scaled to fit) ----------
-const W=760,H=440,FLOOR_TOP=416,PW=15,PH=21;
-let VW=0,VH=0,scale=1,ox=0,oy=0;
-function resize(){ VW=canvas.width=innerWidth; VH=canvas.height=innerHeight; scale=Math.min(VW/W,VH/H); ox=(VW-W*scale)/2; oy=(VH-H*scale)/2; }
+const PW=15,PH=21;
+let VW=0,VH=0,camX=0,camY=0,zoom=2;
+function resize(){ VW=canvas.width=innerWidth; VH=canvas.height=innerHeight; }
 addEventListener('resize',resize); resize();
 
 function remoteAt(r,t){ const b=r.buffer; if(!b.length)return null; if(b.length===1)return b[0];
@@ -265,7 +298,7 @@ const centerOf=(f)=>({x:f.x+f.w/2,y:f.y+f.h/2});
 
 // --- enemy sprites, ported from Void Shell's drawFoes() ---
 function drawFoeVS(f){
-  if(f.kind==='boss') return drawMawVS(f);
+  if(f.kind==='boss'){ if(f.boss==='anvil')return drawAnvilVS(f); if(f.boss==='vesper')return drawVesperVS(f); if(f.boss==='chorus')return drawChorusVS(f); if(f.boss==='bore')return drawBoreVS(f); return drawMawVS(f); }
   const c=centerOf(f); const k={color:C[FOE_KEY[f.kind]]||C.rust}; const lit=f.hit>0;
 
   if(f.kind==='drifter'){
@@ -354,6 +387,91 @@ function drawMawVS(f){
   ctx.beginPath(); ctx.moveTo(c.x-12,c.y+f.h*0.4); ctx.lineTo(c.x-6-gape,c.y+f.h*0.62); ctx.moveTo(c.x+12,c.y+f.h*0.4); ctx.lineTo(c.x+6+gape,c.y+f.h*0.62); ctx.stroke();
 }
 
+// --- the anvil, ported from Void Shell's drawAnvil() ---
+function drawAnvilVS(f){
+  const c=centerOf(f), FT=level.floorTop, lit=f.hit>0;
+  if(f.airborne){ ctx.globalAlpha=0.32; ctx.fillStyle=C.pit; ctx.beginPath(); ctx.ellipse(c.x,FT+4,f.w*0.46,7,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
+  const wind=f.ch>0&&f.ph!=='walk'&&f.ph!=='entry'; const tell=wind&&Math.floor(f.ch/3)%2===0;
+  ctx.fillStyle=C.stone; for(const sx of [-0.32,-0.1,0.12,0.34]) ctx.fillRect(c.x+f.w*sx-4,c.y+f.h*0.2,8,f.h*0.34);
+  ctx.fillStyle=tell||lit?C.bone:C.stone; ctx.fillRect(f.x,f.y,f.w,f.h*0.62);
+  ctx.strokeStyle=tell?C.rust:C.stoneLit; ctx.lineWidth=3; ctx.strokeRect(f.x+1.5,f.y+1.5,f.w-3,f.h*0.62-3);
+  ctx.fillStyle=C.stoneLit; ctx.fillRect(f.x-7,f.y+f.h*0.16,8,f.h*0.3); ctx.fillRect(f.x+f.w-1,f.y+f.h*0.16,8,f.h*0.3);
+  const heat=wind?(34-f.ch)/34:0.25; ctx.fillStyle=f.ph==='vent'?C.mint:C.rust; ctx.globalAlpha=0.4+heat*0.6;
+  for(let i=-1;i<=1;i++) ctx.fillRect(c.x+i*17-5,f.y+f.h*0.2,10,5); ctx.globalAlpha=1;
+  ctx.fillStyle=tell?C.ember:C.sulfur; ctx.beginPath(); ctx.arc(c.x,f.y+f.h*0.4,6+heat*4,0,Math.PI*2); ctx.fill();
+}
+
+// --- vesper, ported from Void Shell's drawVesper() ---
+function drawVesperVS(f){
+  const c=centerOf(f), lit=f.hit>0;
+  if(f.blinkT>0){ const grow=1-f.blinkT/16, ex=f.bx+f.w/2, ey=f.by+f.h/2;
+    ctx.globalAlpha=0.25+grow*0.55; ctx.strokeStyle=C.ember; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(ex+26,ey); ctx.lineTo(ex-6,ey-13); ctx.lineTo(ex-16,ey); ctx.lineTo(ex-6,ey+13); ctx.closePath(); ctx.stroke();
+    ctx.globalAlpha=0.5-grow*0.2; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(ex,ey,40-grow*26,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+  const wind=f.ch>0&&(f.ph==='lance'||f.ph==='sweep'); const tell=wind&&Math.floor(f.ch/3)%2===0;
+  const ang=f.ph==='sweep'&&f.ch<=0?Math.atan2(f.vy,f.vx):Math.atan2(f.ay||0,f.ax||1);
+  if(wind){ ctx.strokeStyle=C.ember; ctx.globalAlpha=0.3+(30-f.ch)/55; ctx.lineWidth=f.ph==='sweep'?9:1.6; ctx.setLineDash([7,7]);
+    ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(c.x+(f.ax||1)*620,c.y+(f.ay||0)*620); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha=1; }
+  ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(ang);
+  ctx.strokeStyle=lit||tell?C.bone:C.stoneLit; ctx.lineWidth=4; ctx.lineCap='round';
+  for(const sy of [-1,1]){ ctx.beginPath(); ctx.moveTo(-4,sy*5); ctx.lineTo(-24,sy*17); ctx.stroke(); }
+  ctx.fillStyle=lit||tell?C.bone:C.stone; ctx.beginPath(); ctx.moveTo(26,0); ctx.lineTo(-6,-13); ctx.lineTo(-16,0); ctx.lineTo(-6,13); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle=tell?C.ember:C.stoneLit; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle=tell?C.ember:C.sulfur; ctx.beginPath(); ctx.arc(6,0,5,0,Math.PI*2); ctx.fill(); ctx.restore();
+}
+
+// --- the chorus, ported from Void Shell's drawChorus() ---
+function drawChorusVS(f){
+  const c=centerOf(f), lit=f.hit>0, sword=f.role==='sword';
+  const alone=[...foeBuf.values()].filter(e=>e.boss==='chorus').length===1;
+  const wind=f.ph==='converge'&&f.ch>0, tell=wind&&Math.floor(f.ch/3)%2===0;
+  if(sword){
+    const br=66; for(let i=1;i<=4;i++){ ctx.globalAlpha=0.2-i*0.035; ctx.strokeStyle=C.bone; ctx.lineWidth=7;
+      ctx.beginPath(); ctx.arc(c.x,c.y,br,f.blade-i*0.26,f.blade-(i-1)*0.26); ctx.stroke(); } ctx.globalAlpha=1;
+    const bx=c.x+Math.cos(f.blade)*br, by=c.y+Math.sin(f.blade)*br;
+    ctx.strokeStyle=C.stoneLit; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(bx,by); ctx.stroke();
+    ctx.save(); ctx.translate(bx,by); ctx.rotate(f.blade+Math.PI/2); ctx.fillStyle=C.bone;
+    ctx.beginPath(); ctx.moveTo(0,-19); ctx.lineTo(7,4); ctx.lineTo(0,13); ctx.lineTo(-7,4); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=C.ember; ctx.fillRect(-2,-16,4,13); ctx.restore();
+  } else {
+    const ga=Math.atan2(f.gy||1,f.gx||0);
+    ctx.strokeStyle=f.guard?(lit?C.bone:C.stoneLit):C.stone; ctx.lineWidth=f.guard?8:5; ctx.globalAlpha=f.guard?1:0.45;
+    ctx.beginPath(); ctx.arc(c.x,c.y,30,ga-0.95,ga+0.95); ctx.stroke();
+    if(f.guard){ ctx.strokeStyle=C.mint; ctx.lineWidth=1.6; ctx.globalAlpha=0.55+Math.sin(f.t*0.09)*0.25; ctx.beginPath(); ctx.arc(c.x,c.y,35,ga-0.95,ga+0.95); ctx.stroke(); }
+    ctx.globalAlpha=1; ctx.strokeStyle=lit?C.bone:C.stoneLit; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(c.x+Math.cos(ga)*26,c.y+Math.sin(ga)*26); ctx.stroke();
+  }
+  ctx.fillStyle=lit||tell?C.bone:C.stone; ctx.beginPath(); ctx.arc(c.x,c.y,f.w*0.34,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=tell?C.ember:C.stoneLit; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle=alone?C.ember:C.rust; ctx.beginPath(); ctx.arc(c.x,c.y,5.5+Math.sin(f.t*0.12)*1.4,0,Math.PI*2); ctx.fill();
+}
+
+// --- the bore, ported from Void Shell's drawBore() ---
+function drawBoreVS(f){
+  if(f.ph==='lurk'){
+    const t=1-f.ch/26, ex=f.fx, ey=f.fy;
+    ctx.strokeStyle=C.ember; ctx.globalAlpha=0.10+t*0.16; ctx.lineWidth=34;
+    ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(ex+f.ax*900,ey+f.ay*900); ctx.stroke();
+    ctx.globalAlpha=0.45+t*0.5; ctx.lineWidth=2.4; ctx.setLineDash([6,8]);
+    ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(ex+f.ax*900,ey+f.ay*900); ctx.stroke(); ctx.setLineDash([]);
+    ctx.lineWidth=3+t*4; ctx.beginPath();
+    for(let i=0;i<7;i++){ const a=(i/7)*Math.PI*2+f.t*0.02, r=(10+t*34)*(i%2?0.6:1); ctx.moveTo(ex,ey); ctx.lineTo(ex+Math.cos(a)*r,ey+Math.sin(a)*r); }
+    ctx.stroke(); ctx.globalAlpha=1; return;
+  }
+  const tr=f.tr||[]; for(let i=tr.length-1;i>=0;i--){ const r=17*(1-i*6/110)+4;
+    ctx.fillStyle=f.hit>0?C.stoneLit:C.stone; ctx.beginPath(); ctx.arc(tr[i][0],tr[i][1],r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=C.rust; ctx.lineWidth=2; ctx.globalAlpha=0.85; ctx.beginPath(); ctx.arc(tr[i][0],tr[i][1],r,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+  const c=centerOf(f); ctx.fillStyle=f.hit>0?C.bone:C.stoneLit; ctx.beginPath(); ctx.arc(c.x,c.y,21,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=C.ember; ctx.beginPath(); ctx.arc(c.x,c.y,6,0,Math.PI*2); ctx.fill();
+}
+function drawQuakes(qs){
+  const FT=level.floorTop; if(!qs)return;
+  for(const q of qs){ const a=Math.max(0,1-q.t/150); ctx.globalAlpha=0.5*a; ctx.fillStyle=C.stoneLit;
+    ctx.beginPath(); ctx.moveTo(q.x-11,FT); ctx.lineTo(q.x,FT-22-6*a); ctx.lineTo(q.x+11,FT); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=0.3*a; ctx.fillStyle=C.rust; ctx.fillRect(q.x-13,FT-4,26,6); }
+  ctx.globalAlpha=1;
+}
+
 // --- projectiles, ported from Void Shell's drawFoeShots() ---
 function drawFoeShotVS(x,y,r,color){
   const rr=(r||2.6)+0.9;
@@ -368,27 +486,67 @@ function drawBolt(x,y,vx,vy,color){
   ctx.fillStyle=C.bone; ctx.beginPath(); ctx.arc(x+ux*3,y+uy*3,1.6,0,Math.PI*2); ctx.fill();
 }
 
+function drawGate(d){
+  const gx=d.x, gy=d.y, gw=d.w, gh=d.h, cx=gx+gw/2, t=performance.now()/1000;
+  // portal glow (pulsing)
+  const pulse=0.5+0.5*Math.sin(t*2);
+  const grad=ctx.createRadialGradient(cx,gy+gh*0.55,4,cx,gy+gh*0.55,gw*0.7);
+  grad.addColorStop(0,C.mint); grad.addColorStop(0.5,'rgba(127,196,168,'+(0.35+0.25*pulse)+')'); grad.addColorStop(1,'rgba(127,196,168,0)');
+  ctx.fillStyle=grad; ctx.fillRect(gx-gw*0.3,gy,gw*1.6,gh);
+  // portal arch (filled)
+  ctx.fillStyle=C.pit; ctx.beginPath();
+  ctx.moveTo(gx+10,gy+gh); ctx.lineTo(gx+10,gy+34);
+  ctx.arc(cx,gy+34,gw/2-10,Math.PI,0); ctx.lineTo(gx+gw-10,gy+gh); ctx.closePath(); ctx.fill();
+  // shimmering inner portal
+  ctx.save(); ctx.globalAlpha=0.5+0.3*pulse; ctx.fillStyle=C.mint;
+  ctx.beginPath(); ctx.moveTo(cx-gw*0.28,gy+gh-8); ctx.lineTo(cx-gw*0.28,gy+40);
+  ctx.arc(cx,gy+40,gw*0.28,Math.PI,0); ctx.lineTo(cx+gw*0.28,gy+gh-8); ctx.closePath(); ctx.fill(); ctx.restore();
+  // pillars
+  ctx.fillStyle=C.stone; ctx.fillRect(gx-14,gy+6,20,gh-6); ctx.fillRect(gx+gw-6,gy+6,20,gh-6);
+  ctx.fillStyle=C.stoneLit; ctx.fillRect(gx-14,gy+6,20,8); ctx.fillRect(gx+gw-6,gy+6,20,8);
+  // lintel
+  ctx.fillStyle=C.stone; ctx.fillRect(gx-16,gy-6,gw+32,16);
+  ctx.fillStyle=C.stoneLit; ctx.fillRect(gx-16,gy-6,gw+32,4);
+  // rune sigils along the lintel
+  ctx.fillStyle=C.sulfur; for(let i=0;i<5;i++){ ctx.fillRect(gx+8+i*(gw-16)/4-2,gy-3,4,4); }
+  // label
+  ctx.fillStyle=C.bone; ctx.font='bold 15px ui-monospace,monospace'; ctx.textAlign='center';
+  ctx.fillText('RUNS',cx,gy-14);
+}
+
 function draw(){
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle=C.pit; ctx.fillRect(0,0,VW,VH);
   if(!level||!me||!self){ requestAnimationFrame(draw); return; }
   const now=performance.now();
-  let shx=0,shy=0; if(shakeAmt>0.4){ shx=(Math.random()*2-1)*shakeAmt*scale; shy=(Math.random()*2-1)*shakeAmt*scale; shakeAmt*=0.86; }
-  ctx.setTransform(scale,0,0,scale,ox+shx,oy+shy);
-  // arena frame + backdrop
-  ctx.fillStyle=C.pitLit; ctx.fillRect(0,0,W,H);
+  const worldW=level.width, worldH=level.height;
+  // follow camera — fixed visible world height (zoomed in); clamps to world bounds
+  const viewH=Math.min(worldH, 520); zoom=VH/viewH; const viewW=VW/zoom;
+  let tx=self.x+PW/2 - viewW/2, ty=self.y+PH/2 - viewH/2;
+  camX = worldW<=viewW ? (worldW-viewW)/2 : Math.max(0, Math.min(worldW-viewW, tx));
+  camY = worldH<=viewH ? (worldH-viewH)/2 : Math.max(0, Math.min(worldH-viewH, ty));
+  let shx=0,shy=0; if(shakeAmt>0.4){ shx=(Math.random()*2-1)*shakeAmt*zoom; shy=(Math.random()*2-1)*shakeAmt*zoom; shakeAmt*=0.86; }
+  ctx.setTransform(zoom,0,0,zoom, -camX*zoom+shx, -camY*zoom+shy);
+  // backdrop + subtle grid
+  ctx.fillStyle=C.pitLit; ctx.fillRect(0,0,worldW,worldH);
+  ctx.strokeStyle='rgba(255,255,255,0.03)'; ctx.lineWidth=1;
+  const g=80; for(let x=Math.floor(camX/g)*g;x<camX+viewW;x+=g){ ctx.beginPath(); ctx.moveTo(x,camY); ctx.lineTo(x,camY+viewH); ctx.stroke(); }
+  for(let y=Math.floor(camY/g)*g;y<camY+viewH;y+=g){ ctx.beginPath(); ctx.moveTo(camX,y); ctx.lineTo(camX+viewW,y); ctx.stroke(); }
   // platforms
   for(const p of level.platforms){ ctx.fillStyle=p.solid?C.stone:C.stoneLit; ctx.fillRect(p.x,p.y,p.w,p.h); if(!p.solid){ctx.fillStyle=C.stone;ctx.fillRect(p.x,p.y+3,p.w,p.h-3);} }
-  // doors
-  for(const d of (level.doors||[])){ ctx.fillStyle='rgba(214,198,60,0.18)'; ctx.fillRect(d.x,d.y,d.w,d.h); ctx.strokeStyle=C.sulfur; ctx.lineWidth=2; ctx.strokeRect(d.x,d.y,d.w,d.h);
-    ctx.fillStyle=C.sulfur; ctx.font='11px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(d.label,d.x+d.w/2,d.y-6); }
+  // doors — gate art if flagged, else a plain marker
+  for(const d of (level.doors||[])){ if(d.gate){ drawGate(d); } else { ctx.fillStyle='rgba(214,198,60,0.18)'; ctx.fillRect(d.x,d.y,d.w,d.h); ctx.strokeStyle=C.sulfur; ctx.lineWidth=2; ctx.strokeRect(d.x,d.y,d.w,d.h);
+    ctx.fillStyle=C.sulfur; ctx.font='11px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(d.label,d.x+d.w/2,d.y-6); } }
   let promptDoor=null; for(const d of (level.doors||[])) if(self.x<d.x+d.w&&self.x+PW>d.x&&self.y<d.y+d.h&&self.y+PH>d.y) promptDoor=d;
+  drawQuakes(quakes);
 
   const TICK=1000/60;
   const sclamp=Math.min(Math.max((now-foesAt)/TICK,0),4);
   // foes — extrapolated forward from the last 30Hz snapshot for smooth 60fps motion
   for(const [,e] of foeBuf){ const last=e.buf[e.buf.length-1]; if(!last)continue;
     const et=Math.min(Math.max((now-e.atMs)/TICK,0),3);
-    const ef={kind:e.kind,boss:e.boss,w:e.w,h:e.h,hit:e.hit,phase:e.ph,charge:e.ch,vx:e.vx,vy:e.vy,
+    const ef={kind:e.kind,boss:e.boss,w:e.w,h:e.h,hit:e.hit,phase:e.ph,charge:e.ch,ph:e.ph,ch:e.ch,vx:e.vx,vy:e.vy,
+      role:e.role,guard:e.guard,airborne:e.airborne,armored:e.armored,blade:e.blade,twin:e.twin,blinkT:e.blinkT,
+      bx:e.bx,by:e.by,ax:e.ax,ay:e.ay,gx:e.gx,gy:e.gy,fx:e.fx,fy:e.fy,tr:e.tr,
       x:last.x+(e.vx||0)*et, y:last.y+(e.vy||0)*et, t:(e.serverT||0)+et};
     drawFoeVS(ef); }
   // foe shots — extrapolated (with gravity for lobs), Void Shell bullet look
@@ -410,7 +568,7 @@ function draw(){
   ctx.setTransform(1,0,0,1,0,0);
   if(promptDoor&&!uiBlocking()){ $('prompt').classList.remove('hidden'); const verb=promptDoor.type==='leave'?'exit':'open runs'; $('prompt').innerHTML=`Press <kbd>${prettyKey(binds.interact[0])}</kbd> to ${verb}`; }
   else $('prompt').classList.add('hidden');
-  if(mouseAim && !uiBlocking()){ const mx=ox+mouse.x*scale, my=oy+mouse.y*scale; ctx.strokeStyle=C.bone; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(mx,my,6,0,Math.PI*2); ctx.stroke(); }
+  if(mouseAim && !uiBlocking()){ ctx.strokeStyle=C.bone; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(mouse.x,mouse.y,6,0,Math.PI*2); ctx.stroke(); }
 
   sendAim();
   requestAnimationFrame(draw);
