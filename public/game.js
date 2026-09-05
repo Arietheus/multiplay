@@ -42,7 +42,7 @@ const DEFAULTS = { left:['ArrowLeft'], right:['ArrowRight'], aimUp:['ArrowUp'], 
   jump:['Space','KeyF'], fire:['KeyD'], nade:['KeyS'], dash:['ShiftLeft','ShiftRight'],
   interact:['KeyA'], aimMode:['KeyM'], chat:['Enter'], settings:['Escape'] };
 const LABELS = { left:'Move left',right:'Move right',aimUp:'Aim up',aimDown:'Aim down',jump:'Jump',fire:'Fire',nade:'Grenade',dash:'Dash',interact:'Interact',aimMode:'Toggle mouse aim',chat:'Chat',settings:'Options' };
-const ACTIVE = new Set(['left','right','aimUp','aimDown','jump','fire','dash','interact','aimMode','chat','settings']);
+const ACTIVE = new Set(['left','right','aimUp','aimDown','jump','fire','nade','dash','interact','aimMode','chat','settings']);
 const SWALLOW = new Set(['Space','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Tab']);
 let binds = loadBinds();
 function loadBinds(){ try{ const s=JSON.parse(localStorage.getItem('vs_binds')||'{}'); const o={}; for(const a in DEFAULTS) o[a]=Array.isArray(s[a])?s[a]:DEFAULTS[a].slice(); return o; }catch{ return JSON.parse(JSON.stringify(DEFAULTS)); } }
@@ -74,7 +74,16 @@ $('toggleMouse').onclick=()=>{ mouseAim=!mouseAim; localStorage.setItem('vs_mous
 // ---------- networking ----------
 let ws=null, connected=false, me=null, hidden=false;
 let level=null; const remotes=new Map();
-let foeBuf=new Map(), fshots=[], pshots=[], quakes=[], foesAt=0; let waveNo=0;
+let foeBuf=new Map(), fshots=[], pshots=[], quakes=[], nades=[], foesAt=0; let waveNo=0;
+let blasts=[], catalog=[], owned=new Set(), myCrest=null, myWake=null;
+// wake particle specs, ported from Void Shell's WAKE_LOOK
+const WAKE_LOOK={
+  embers:{color:()=>C.sulfur,n:5,speed:2.4,life:26,grav:0.06,size:2},
+  frost :{color:()=>C.mint,  n:4,speed:0.7,life:42,grav:-0.01,size:2},
+  soot  :{color:()=>C.stone, n:6,speed:1.4,life:34,grav:0.16,size:3},
+  rune  :{color:()=>C.rust,  n:3,speed:0.3,life:30,grav:0,size:3.4},
+  comet :{color:()=>(Math.random()<0.4?C.bone:C.sulfur),n:7,speed:1.1,life:52,grav:-0.02,size:2.6},
+};
 const BOSS_NAMES={maw:'BROOD MAW',anvil:'THE ANVIL',vesper:'VESPER',chorus:'THE CHORUS',bore:'THE BORE'};
 let self=null, inputSeq=0, pending=[];
 function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(`${proto}://${location.host}`);
@@ -84,7 +93,10 @@ function connect(){ const proto=location.protocol==='https:'?'wss':'ws'; ws=new 
   ws.onmessage=(ev)=>onMessage(JSON.parse(ev.data)); }
 function onMessage(m){ switch(m.type){
   case 'welcome': me=m.user; break;
-  case 'progress': mySlag=m.slag; myBest=m.bestWave; updateHud(); break;
+  case 'progress': mySlag=m.slag; myBest=m.bestWave; if(m.cosmetics)owned=new Set(m.cosmetics); if('crest' in m)myCrest=m.crest; if('wake' in m)myWake=m.wake; renderShop(); updateHud(); break;
+  case 'catalog': catalog=m.cosmetics||[]; renderShop(); break;
+  case 'openShop': openShop(); break;
+  case 'blast': blasts.push({x:m.x,y:m.y,r:m.r,t:0}); shake(7); burst(m.x,m.y,22,C.sulfur,4.2,30); break;
   case 'room': level=m; youHost=!!m.youHost; remotes.clear(); foeBuf.clear(); fshots=[]; pshots=[]; self=Physics.newState(m.spawn); pending=[]; myShots=[]; bits=[]; shakeAmt=0;
     selfDead=false; $('death').classList.add('hidden');
     $('btnEnd').classList.toggle('hidden', !(m.kind==='run' && youHost));
@@ -100,7 +112,7 @@ function onState(m){ const now=performance.now();
   const seen=new Set();
   for(const p of m.players){ if(p.id===(me&&me.id)){ myColor=p.color; continue; } seen.add(p.id);
     let r=remotes.get(p.id); if(!r){r={buffer:[],color:p.color,name:p.name};remotes.set(p.id,r);}
-    r.color=p.color; r.name=p.name; r.hp=p.hp; r.dead=p.dead; r.iframes=p.iframes; r.aimx=p.aimx; r.aimy=p.aimy;
+    r.color=p.color; r.name=p.name; r.hp=p.hp; r.dead=p.dead; r.iframes=p.iframes; r.aimx=p.aimx; r.aimy=p.aimy; r.crest=p.crest; r.wake=p.wake;
     r.buffer.push({t:now,x:p.x,y:p.y,face:p.face}); if(r.buffer.length>12)r.buffer.shift(); }
   for(const id of remotes.keys()) if(!seen.has(id)) remotes.delete(id);
   // foes -> per-id interpolation buffers (smooth motion between 30Hz snapshots)
@@ -114,7 +126,7 @@ function onState(m){ const now=performance.now();
   for(const id of foeBuf.keys()) if(!fseen.has(id)){ const e=foeBuf.get(id); const last=e.buf[e.buf.length-1];
     if(last){ if(e.boss){ shake(12); burst(last.x+e.w/2,last.y+e.h/2,30,C.ember,4.2,38); } else burst(last.x+(e.w||8)/2,last.y+(e.h||8)/2,10,C.bone,3,22); }
     foeBuf.delete(id); }
-  fshots=m.fshots||[]; pshots=m.pshots||[]; quakes=m.quakes||[]; foesAt=now;
+  fshots=m.fshots||[]; pshots=m.pshots||[]; quakes=m.quakes||[]; nades=m.nades||[]; foesAt=now;
   const bosses=(m.foes||[]).filter(f=>f.kind==='boss');
   if(bosses.length){ $('bossbar').style.display='block'; $('bossname').textContent=BOSS_NAMES[bosses[0].boss]||'BOSS';
     const hp=bosses.reduce((s,b)=>s+b.hp,0), mx=bosses.reduce((s,b)=>s+(b.maxHp||1),0);
@@ -159,13 +171,29 @@ function showPostmortem(m){
   $('postmortem').classList.remove('hidden');
 }
 $('pmclose').onclick=()=>$('postmortem').classList.add('hidden');
+// ---- shop ----
+function openShop(){ renderShop(); $('shop').classList.remove('hidden'); }
+function closeShop(){ $('shop').classList.add('hidden'); }
+$('closeShop').onclick=closeShop;
+function equipToggle(id,kind){ const cur=kind==='crest'?myCrest:myWake; const next=cur===id?null:id;
+  const crest=kind==='crest'?next:myCrest, wake=kind==='wake'?next:myWake;
+  if(ws&&connected)ws.send(JSON.stringify({type:'equip',crest,wake})); }
+function renderShop(){ if($('shop').classList.contains('hidden'))return; $('shopSlag').textContent=`${mySlag} ◆`;
+  const fill=(el,kind)=>{ el.innerHTML=''; for(const c of catalog.filter(x=>x.kind===kind)){ const has=owned.has(c.id); const worn=(kind==='crest'?myCrest:myWake)===c.id;
+    const card=document.createElement('div'); card.className='cosmetic'+(worn?' on':'');
+    const nm=document.createElement('div'); nm.className='cn'; nm.textContent=c.name; const cc=document.createElement('div'); cc.className='cc'; cc.textContent=has?'owned':`${c.cost} ◆`;
+    const btn=document.createElement('button');
+    if(!has){ btn.className='buy'; btn.textContent='Buy'; btn.disabled=mySlag<c.cost; btn.onclick=()=>ws&&ws.send(JSON.stringify({type:'buyCosmetic',id:c.id})); }
+    else { btn.className=worn?'equipped':''; btn.textContent=worn?'Worn — remove':'Equip'; btn.onclick=()=>equipToggle(c.id,kind); }
+    card.appendChild(nm); card.appendChild(cc); card.appendChild(btn); el.appendChild(card); } };
+  fill($('shopCrests'),'crest'); fill($('shopWakes'),'wake'); }
 $('btnEnd').onclick=()=>{ if(ws&&connected&&confirm('End the run for everyone and bank your slag?')) ws.send(JSON.stringify({type:'endRun'})); };
 
 // ---------- input ----------
 const held={left:false,right:false,jump:false,aimUp:false,aimDown:false};
 let firing=false, mouseAim=localStorage.getItem('vs_mouse')==='1';
 const mouse={x:400,y:300}; let lastAim={x:1,y:0};
-function uiBlocking(){ return chatOpen() || !$('controls').classList.contains('hidden') || !$('runs').classList.contains('hidden') || !$('postmortem').classList.contains('hidden'); }
+function uiBlocking(){ return chatOpen() || !$('controls').classList.contains('hidden') || !$('runs').classList.contains('hidden') || !$('postmortem').classList.contains('hidden') || !$('shop').classList.contains('hidden'); }
 function clearHeld(){ held.left=held.right=held.jump=held.aimUp=held.aimDown=false; firing=false; sendInput(); sendFire(false); }
 function chatOpen(){ return !$('chatform').classList.contains('hidden'); }
 function openChat(){ $('chatform').classList.remove('hidden'); $('chatinput').focus(); clearHeld(); }
@@ -241,6 +269,7 @@ window.addEventListener('keydown',(e)=>{
     case 'aimDown': held.aimDown=true; break;
     case 'fire': if(!firing){firing=true; sendFire(true);} break;
     case 'dash': dashQueued=true; dashAim=computeAim(); break;
+    case 'nade': if(ws&&connected)ws.send(JSON.stringify({type:'nade'})); break;
     case 'interact': if(ws&&connected)ws.send(JSON.stringify({type:'interact'})); break;
   }
 });
@@ -517,6 +546,30 @@ function drawGate(d){
   ctx.fillText('RUNS',cx,gy-14);
 }
 
+// grenades — 5px pip that blinks hot near its fuse (Void Shell drawNades)
+function drawNades(){ for(const g of nades){ const hot=g.fuse<22 && Math.floor(g.fuse/4)%2===0; ctx.fillStyle=hot?C.sulfur:C.bone; ctx.fillRect(g.x,g.y,5,5); } }
+// blast rings — expand + fade over 16 frames (Void Shell drawBlasts)
+function drawBlasts(){ for(let i=blasts.length-1;i>=0;i--){ const e=blasts[i]; e.t++; if(e.t>16){blasts.splice(i,1);continue;} const t=e.t/16;
+  ctx.globalAlpha=(1-t)*0.75; ctx.strokeStyle=C.sulfur; ctx.lineWidth=3*(1-t)+1; ctx.beginPath(); ctx.arc(e.x,e.y,e.r*(0.25+t*0.85),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; } }
+// worn crests — ported verbatim from Void Shell's drawCrestShape
+function drawCrestShape(id,hx,hy,t){ const g=ctx, TAU=Math.PI*2;
+  if(id==='lamp'){ g.fillStyle=C.stoneLit; g.fillRect(hx-3,hy-6,6,5); const flick=0.7+Math.sin(t*3)*0.2; const glow=g.createRadialGradient(hx,hy-5,0,hx,hy-5,34); glow.addColorStop(0,C.sulfur); glow.addColorStop(1,'rgba(0,0,0,0)'); g.globalAlpha=0.32*flick; g.fillStyle=glow; g.beginPath(); g.arc(hx,hy-5,34,0,TAU); g.fill(); g.globalAlpha=1; g.fillStyle=C.sulfur; g.beginPath(); g.arc(hx,hy-4,2.2,0,TAU); g.fill(); }
+  if(id==='horns'){ g.strokeStyle=C.bone; g.lineWidth=2.4; g.lineCap='round'; for(const sx of [-1,1]){ g.beginPath(); g.moveTo(hx+sx*4,hy); g.quadraticCurveTo(hx+sx*11,hy-5,hx+sx*8,hy-12); g.stroke(); } }
+  if(id==='plume'){ const sway=Math.sin(t*1.6)*3; g.strokeStyle=C.stoneLit; g.lineWidth=2; g.beginPath(); g.moveTo(hx,hy); g.quadraticCurveTo(hx+4,hy-9,hx+sway,hy-17); g.stroke(); g.fillStyle=C.ember; g.beginPath(); g.ellipse(hx+sway,hy-18,3.2,6,sway*0.06,0,TAU); g.fill(); }
+  if(id==='crown'){ g.fillStyle=C.sulfur; for(const [dx,h] of [[-6,7],[0,11],[6,7]]){ g.beginPath(); g.moveTo(hx+dx-2.4,hy); g.lineTo(hx+dx,hy-h); g.lineTo(hx+dx+2.4,hy); g.closePath(); g.fill(); } }
+  if(id==='halo'){ const wob=Math.sin(t*1.2)*2; g.strokeStyle=C.rust; g.lineWidth=2.2; g.globalAlpha=0.9; g.beginPath(); g.ellipse(hx,hy-10+wob*0.3,11,3.6+wob*0.2,0,0,TAU); g.stroke(); g.globalAlpha=1; } }
+// wake trails — spawn particle bits per Void Shell WAKE_LOOK
+function emitWake(x,y,id){ const w=WAKE_LOOK[id]; if(!w||Math.random()>0.6)return; const a=Math.random()*Math.PI*2, s=w.speed*(0.3+Math.random()*0.8);
+  bits.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-0.3,life:w.life*(0.6+Math.random()*0.5),max:w.life,color:w.color(),size:w.size,grav:w.grav}); }
+// a little market stall for the shop door
+function drawShop(d){ const x=d.x,y=d.y,w=d.w,h=d.h,cx=x+w/2;
+  ctx.fillStyle=C.stone; ctx.fillRect(x-6,y+22,10,h-22); ctx.fillRect(x+w-4,y+22,10,h-22);           // posts
+  ctx.fillStyle=C.pit; ctx.fillRect(x-2,y+40,w+4,h-40);                                              // counter back
+  ctx.fillStyle=C.stoneLit; ctx.fillRect(x-2,y+h-14,w+4,14);                                         // counter
+  for(let i=0;i<7;i++){ ctx.fillStyle=i%2?C.ember:C.bone; ctx.beginPath(); ctx.moveTo(x-8+i*(w+16)/6,y+18); ctx.lineTo(x-8+(i+1)*(w+16)/6,y+18); ctx.lineTo(x-8+(i+0.5)*(w+16)/6,y+32); ctx.closePath(); ctx.fill(); } // awning
+  ctx.fillStyle=C.sulfur; ctx.font='bold 14px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText('SHOP',cx,y+12);
+  ctx.fillStyle=C.sulfur; ctx.beginPath(); ctx.arc(cx,y+h-26,6,0,Math.PI*2); ctx.fill(); ctx.fillStyle=C.pit; ctx.font='9px ui-monospace,monospace'; ctx.fillText('◆',cx,y+h-23); }
+
 function draw(){
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle=C.pit; ctx.fillRect(0,0,VW,VH);
   if(!level||!me||!self){ requestAnimationFrame(draw); return; }
@@ -537,7 +590,7 @@ function draw(){
   // platforms
   for(const p of level.platforms){ ctx.fillStyle=p.solid?C.stone:C.stoneLit; ctx.fillRect(p.x,p.y,p.w,p.h); if(!p.solid){ctx.fillStyle=C.stone;ctx.fillRect(p.x,p.y+3,p.w,p.h-3);} }
   // doors — gate art if flagged, else a plain marker
-  for(const d of (level.doors||[])){ if(d.gate){ drawGate(d); } else { ctx.fillStyle='rgba(214,198,60,0.18)'; ctx.fillRect(d.x,d.y,d.w,d.h); ctx.strokeStyle=C.sulfur; ctx.lineWidth=2; ctx.strokeRect(d.x,d.y,d.w,d.h);
+  for(const d of (level.doors||[])){ if(d.gate){ drawGate(d); } else if(d.shop){ drawShop(d); } else { ctx.fillStyle='rgba(214,198,60,0.18)'; ctx.fillRect(d.x,d.y,d.w,d.h); ctx.strokeStyle=C.sulfur; ctx.lineWidth=2; ctx.strokeRect(d.x,d.y,d.w,d.h);
     ctx.fillStyle=C.sulfur; ctx.font='11px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(d.label,d.x+d.w/2,d.y-6); } }
   let promptDoor=null; for(const d of (level.doors||[])) if(self.x<d.x+d.w&&self.x+PW>d.x&&self.y<d.y+d.h&&self.y+PH>d.y) promptDoor=d;
   drawQuakes(quakes);
@@ -559,17 +612,26 @@ function draw(){
   // own predicted shots (instant feedback; server authoritative for hits)
   const col=myColor||C.mint;
   for(const s of myShots){ drawBolt(s.x,s.y,s.vx,s.vy,col); }
+  // grenades + blasts (Void Shell)
+  drawNades(); drawBlasts();
   // particle bits
   drawBits();
-  // remotes
+  // remotes (with crest + wake)
   const rt=now-100;
-  for(const [,r] of remotes){ const s=remoteAt(r,rt); if(!s)continue; drawPlayer(s.x,s.y,s.face,r.color,r.dead,r.iframes,s.face,0); ctx.fillStyle=C.bone; ctx.font='10px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(r.name||'',s.x+PW/2,s.y-6); }
-  // self
+  for(const [,r] of remotes){ const s=remoteAt(r,rt); if(!s)continue;
+    let spd=0; const bb=r.buffer; if(bb.length>=2){ const p2=bb[bb.length-1],p1=bb[bb.length-2]; spd=Math.hypot(p2.x-p1.x,p2.y-p1.y); }
+    drawPlayer(s.x,s.y,s.face,r.color,r.dead,r.iframes,s.face,0);
+    if(r.crest) drawCrestShape(r.crest, s.x+PW/2, s.y+2, now/1000);
+    if(r.wake && spd>1.6) emitWake(s.x+PW/2, s.y+PH*0.7, r.wake);
+    ctx.fillStyle=C.bone; ctx.font='10px ui-monospace,monospace'; ctx.textAlign='center'; ctx.fillText(r.name||'',s.x+PW/2,s.y-6); }
+  // self (with crest + wake)
   const a=computeAim(); drawPlayer(self.x,self.y,self.face,myColor||C.mint,selfDead,0,a.x,a.y);
+  if(myCrest) drawCrestShape(myCrest, self.x+PW/2, self.y+2, now/1000);
+  if(myWake && (Math.abs(self.vx)+Math.abs(self.vy)>2 || self.dashT>0)) emitWake(self.x+PW/2, self.y+PH*0.7, myWake);
 
   // prompt + reticle (screen space)
   ctx.setTransform(1,0,0,1,0,0);
-  if(promptDoor&&!uiBlocking()){ $('prompt').classList.remove('hidden'); const verb=promptDoor.type==='leave'?'exit':'open runs'; $('prompt').innerHTML=`Press <kbd>${prettyKey(binds.interact[0])}</kbd> to ${verb}`; }
+  if(promptDoor&&!uiBlocking()){ $('prompt').classList.remove('hidden'); const verb=promptDoor.type==='leave'?'exit':promptDoor.type==='shop'?'open the shop':'open runs'; $('prompt').innerHTML=`Press <kbd>${prettyKey(binds.interact[0])}</kbd> to ${verb}`; }
   else $('prompt').classList.add('hidden');
   if(mouseAim && !uiBlocking()){ ctx.strokeStyle=C.bone; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(mouse.x,mouse.y,6,0,Math.PI*2); ctx.stroke(); }
 

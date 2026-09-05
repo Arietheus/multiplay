@@ -53,8 +53,16 @@ public/game.js     Client: prediction/reconciliation, aim, Void Shell rendering
 - **Palette + 5 skins** — the `C` palette (sulfur/ash/oxide/brine/bloom),
   switchable live in Options; the whole game repaints, sprites and chrome alike.
 - **Controls** — StarBreak-style: arrows move, ↑/↓ aim, **Space/F** jump, **D**
-  fire, **Shift** dash, **A** interact, **M** mouse-aim, plus **S** grenade
-  reserved. All rebindable, saved in your browser.
+  fire, **S** grenade, **Shift** dash, **A** interact, **M** mouse-aim. All
+  rebindable, saved in your browser.
+- **Grenade** — the **S** key lobs a Void Shell grenade: it arcs, bounces off
+  ledges, and detonates on a fuse, damaging everything in the blast radius (its
+  cooldown, damage, and radius scale with depth).
+- **Shop** — a market stall in the lobby (walk up and interact) sells Void Shell's
+  cosmetics for slag: five head **crests** (lamp, horns, plume, crown, halo) and
+  five movement **wakes** (embers, frost, soot, rune, comet). Bought once, worn on
+  any run, and visible to everyone else in the room. Ownership and what you have
+  equipped persist to your account.
 - **Six arenas** — Ledges, Spine, Terraces, Chasm (no centre floor), Pillars
   (and Lifts is the next drop — see below).
 - **Pattern system** — the `emit()` (rings/fans) and `lob()` (arced) emitters, so

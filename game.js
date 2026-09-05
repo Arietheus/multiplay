@@ -15,16 +15,33 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const MAX_HP = 5, IFRAMES = 92, CORE = 7.5;
 // Difficulty depths (Void Shell): count/speed/hp/bossHp/maxHp/score multipliers.
 const DIFFS = [
-  { id: 'shallow', name: 'Shallow',       count: 0.70, speed: 0.75, hpAdd: 0, bossMul: 0.70, maxHp: 7, score: 0.6 },
-  { id: 'working', name: 'Working depth', count: 1.00, speed: 1.00, hpAdd: 0, bossMul: 1.00, maxHp: 5, score: 1.0 },
-  { id: 'deep',    name: 'Deep cut',      count: 1.35, speed: 1.35, hpAdd: 1, bossMul: 1.35, maxHp: 4, score: 2.5 },
-  { id: 'abyssal', name: 'Abyssal',       count: 1.70, speed: 1.70, hpAdd: 2, bossMul: 1.75, maxHp: 3, score: 3.8 },
+  { id: 'shallow', name: 'Shallow',       count: 0.70, speed: 0.75, hpAdd: 0, bossMul: 0.70, maxHp: 7, score: 0.6, nadeCd: 66, nadeDmg: 5, blastR: 60 },
+  { id: 'working', name: 'Working depth', count: 1.00, speed: 1.00, hpAdd: 0, bossMul: 1.00, maxHp: 5, score: 1.0, nadeCd: 78, nadeDmg: 4, blastR: 55 },
+  { id: 'deep',    name: 'Deep cut',      count: 1.35, speed: 1.35, hpAdd: 1, bossMul: 1.35, maxHp: 4, score: 2.5, nadeCd: 90, nadeDmg: 3, blastR: 52 },
+  { id: 'abyssal', name: 'Abyssal',       count: 1.70, speed: 1.70, hpAdd: 2, bossMul: 1.75, maxHp: 3, score: 3.8, nadeCd: 100, nadeDmg: 3, blastR: 50 },
 ];
 // Admin accounts (comma-separated usernames in the ADMIN_USERS env var).
 const ADMINS = new Set((process.env.ADMIN_USERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 const FIRE_CD = 7, BULLET_SPEED = 8.4, BULLET_LIFE = 64, BULLET_DMG = 1;
+const NADE_GRAV = 0.30;
 const DASH_CD = 150, DASH_TIME = 10, DASH_SPEED = 11;
 const CHAT_MAX = 200, RUN_CAP = 8;
+
+// Cosmetics (Void Shell): bought once with slag, worn by the player. Crests sit
+// on the head; wakes are the trail you leave when moving fast.
+const COSMETICS = [
+  { id: 'lamp',   kind: 'crest', cost: 25, name: "Miner's lamp" },
+  { id: 'horns',  kind: 'crest', cost: 30, name: 'Cut horns' },
+  { id: 'plume',  kind: 'crest', cost: 35, name: 'Ash plume' },
+  { id: 'crown',  kind: 'crest', cost: 45, name: 'Slag crown' },
+  { id: 'halo',   kind: 'crest', cost: 60, name: 'Cinder ring' },
+  { id: 'embers', kind: 'wake',  cost: 25, name: 'Ember wake' },
+  { id: 'frost',  kind: 'wake',  cost: 30, name: 'Cold wake' },
+  { id: 'soot',   kind: 'wake',  cost: 35, name: 'Soot wake' },
+  { id: 'rune',   kind: 'wake',  cost: 45, name: 'Rune wake' },
+  { id: 'comet',  kind: 'wake',  cost: 60, name: 'Comet wake' },
+];
+const COSMETIC_BY_ID = Object.fromEntries(COSMETICS.map((c) => [c.id, c]));
 const BOSS_EVERY = +process.env.VS_BOSS_EVERY || 5;   // every Nth wave is the boss
 
 // ---- geometry: larger scrolling arenas (Void Shell ledges, bigger world) ----
@@ -61,7 +78,8 @@ function lobbyLevel() {
       ledge(180, floorTop - 90, 180), ledge(470, floorTop - 170, 170),
       ledge(LOBBY_W - 360, floorTop - 90, 180), ledge(LOBBY_W - 640, floorTop - 170, 170),
       ledge(gx - 60, floorTop - 250, 260)],
-    doors: [{ x: gx, y: gy, w: 140, h: 150, type: 'run-browser', label: 'RUNS', gate: true }] };
+    doors: [{ x: gx, y: gy, w: 140, h: 150, type: 'run-browser', label: 'RUNS', gate: true },
+      { x: 250, y: floorTop - 118, w: 120, h: 118, type: 'shop', label: 'SHOP', shop: true }] };
 }
 
 // ---- enemies + bosses (Void Shell) ----
@@ -94,7 +112,7 @@ const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h 
 const centerOf = (f) => ({ x: f.x + f.w / 2, y: f.y + f.h / 2 });
 
 function makeRoom(id, level, meta = {}) {
-  const room = { id, level, players: new Set(), foes: [], foeShots: [], pBullets: [], quakes: [],
+  const room = { id, level, players: new Set(), foes: [], foeShots: [], pBullets: [], quakes: [], nades: [],
     wave: 0, phase: 'idle', timer: 0, ...meta };
   rooms.set(id, room);
   return room;
@@ -120,13 +138,15 @@ function onConnection(ws, user) {
     queue: [], lastSeq: 0, roomId: null, alive: true,
     hp: MAX_HP, maxHp: MAX_HP, god: false, isAdmin: ADMINS.has(user.username.toLowerCase()),
     iframes: 0, dead: false, score: 0, kills: 0, bossKills: 0, slag: 0, bestWave: 0,
-    aim: { x: 1, y: 0 }, firing: false, fireCd: 0, dashCd: 0, dashT: 0, dashX: 1, dashY: 0 };
+    aim: { x: 1, y: 0 }, firing: false, fireCd: 0, nadeCd: 0, dashCd: 0, dashT: 0, dashX: 1, dashY: 0,
+    owned: new Set(), crest: null, wake: null };
   players.set(uid, p);
   ws.on('pong', () => { p.alive = true; });
 
   send(p, { type: 'welcome', user: { id: uid, username: user.username } });
-  db.getProgress(uid).then((pr) => { p.slag = pr.slag; p.bestWave = pr.bestWave;
-    send(p, { type: 'progress', slag: pr.slag, bestWave: pr.bestWave }); }).catch(() => {});
+  send(p, { type: 'catalog', cosmetics: COSMETICS });
+  db.getProgress(uid).then((pr) => { p.slag = pr.slag; p.bestWave = pr.bestWave; p.owned = new Set(pr.cosmetics); p.crest = pr.crest; p.wake = pr.wake;
+    send(p, { type: 'progress', slag: pr.slag, bestWave: pr.bestWave, cosmetics: [...p.owned], crest: p.crest, wake: p.wake }); }).catch(() => {});
   joinRoom(p, ensureLobby());
 
   ws.on('message', (raw) => { if (raw.length > 2048) return; let m; try { m = JSON.parse(raw); } catch { return; } handle(p, m); });
@@ -170,6 +190,9 @@ function handle(p, m) {
     }
     case 'aim': { const x = +m.x, y = +m.y, l = Math.hypot(x, y); if (l > 0) p.aim = { x: x / l, y: y / l }; break; }
     case 'fire': p.firing = !!m.down; break;
+    case 'nade': throwNade(p); break;
+    case 'buyCosmetic': buyCosmetic(p, m.id); break;
+    case 'equip': equipCosmetic(p, m); break;
     case 'interact': tryInteract(p); break;
     case 'endRun': { const room = rooms.get(p.roomId); if (room && room.kind === 'run' && room.host === p.username) endRun(room, 'ended'); break; }
     case 'createRun': createRun(p, m.diff | 0); break;
@@ -184,7 +207,9 @@ function handle(p, m) {
 function doorUnder(p) { const room = rooms.get(p.roomId); if (!room || !room.level.doors) return null;
   return room.level.doors.find((d) => overlap({ x: p.x, y: p.y, w: PW, h: PH }, d)) || null; }
 function tryInteract(p) { const d = doorUnder(p); if (!d) return;
-  if (d.type === 'leave') switchRoom(p, ensureLobby()); else if (d.type === 'run-browser') sendRunList(p); }
+  if (d.type === 'leave') switchRoom(p, ensureLobby());
+  else if (d.type === 'run-browser') sendRunList(p);
+  else if (d.type === 'shop') send(p, { type: 'openShop' }); }
 function sendRunList(p) { const runs = [];
   for (const r of rooms.values()) if (r.kind === 'run') runs.push({ id: r.id, host: r.host, count: r.players.size, cap: RUN_CAP, wave: r.wave, diff: r.diff || 0, diffName: (DIFFS[r.diff] || DIFFS[1]).name });
   send(p, { type: 'runList', runs }); }
@@ -192,7 +217,8 @@ function createRun(p, diff) {
   const d = DIFFS[diff] ? diff : 1, cfg = DIFFS[d];
   const id = 'run:' + crypto.randomBytes(3).toString('hex');
   const room = makeRoom(id, arenaLevel(0), { kind: 'run', host: p.username, arena: 0, diff: d,
-    speedMul: cfg.speed, countMul: cfg.count, hpAdd: cfg.hpAdd, bossMul: cfg.bossMul, scoreMul: cfg.score });
+    speedMul: cfg.speed, countMul: cfg.count, hpAdd: cfg.hpAdd, bossMul: cfg.bossMul, scoreMul: cfg.score,
+    nadeCd: cfg.nadeCd, nadeDmg: cfg.nadeDmg, blastR: cfg.blastR });
   switchRoom(p, room);
 }
 // ---- admin commands (accounts listed in ADMIN_USERS) ----
@@ -217,6 +243,48 @@ function joinRun(p, id) { const room = rooms.get(id);
   if (!room || room.kind !== 'run') return send(p, { type: 'system', text: 'That run no longer exists.' });
   if (room.players.size >= RUN_CAP) return send(p, { type: 'system', text: 'That run is full.' });
   switchRoom(p, room); }
+
+// ---- grenade (Void Shell): arced, bounces, detonates on fuse ----
+function throwNade(p) {
+  const room = rooms.get(p.roomId); if (!room || room.kind !== 'run' || p.dead || p.nadeCd > 0) return;
+  const a = p.aim, c = { x: p.x + PW / 2, y: p.y + PH / 2 };
+  room.nades.push({ x: c.x + a.x * 10, y: c.y + a.y * 10, w: 5, h: 5,
+    vx: a.x * 6.2 + p.vx * 0.3, vy: a.y * 6.2 - 2.4, fuse: 62, r: room.blastR || 55, dmg: room.nadeDmg || 4, owner: p.userId });
+  p.nadeCd = room.nadeCd || 78;
+}
+function stepNades(room) {
+  const plats = room.level.platforms, LW = room.level.width;
+  for (let i = room.nades.length - 1; i >= 0; i--) {
+    const g = room.nades[i], gPrev = g.y + g.h;
+    g.vy = Math.min(g.vy + NADE_GRAV, 10); g.y += g.vy;
+    for (const s of plats) { if (!overlap(g, s)) continue; if (!s.solid && (g.vy <= 0 || gPrev > s.y + 1)) continue; g.y = g.vy > 0 ? s.y - g.h : s.y + s.h; g.vy *= -0.42; g.vx *= 0.7; }
+    g.x += g.vx;
+    for (const s of plats) { if (!s.solid || !overlap(g, s)) continue; g.x = g.vx > 0 ? s.x - g.w : s.x + s.w; g.vx *= -0.45; }
+    if (g.x < 0 || g.x > LW - g.w) g.vx *= -0.5; g.x = clamp(g.x, 0, LW - g.w);
+    if (--g.fuse <= 0) { detonateNade(room, g.x + g.w / 2, g.y + g.h / 2, g.r, g.dmg, players.get(g.owner)); room.nades.splice(i, 1); }
+  }
+}
+function detonateNade(room, x, y, r, dmg, owner) {
+  broadcast(room.id, { type: 'blast', x: Math.round(x), y: Math.round(y), r });
+  for (const f of [...room.foes]) { if (f.armored || f.guardInvuln) continue; const c = centerOf(f); if (Math.hypot(c.x - x, c.y - y) < r) damageFoe(room, f, dmg, owner); }
+}
+
+// ---- cosmetics shop ----
+function buyCosmetic(p, id) {
+  const item = COSMETIC_BY_ID[id], say = (t) => send(p, { type: 'system', text: t });
+  if (!item) return; if (p.owned.has(id)) return say('Already owned.'); if (p.slag < item.cost) return say('Not enough slag.');
+  p.slag -= item.cost; p.owned.add(id);
+  db.saveCosmetics(p.userId, p.slag, [...p.owned]).then((sl) => { p.slag = sl;
+    send(p, { type: 'progress', slag: p.slag, bestWave: p.bestWave, cosmetics: [...p.owned], crest: p.crest, wake: p.wake }); }).catch(() => {});
+  say('Bought ' + item.name + '.');
+}
+function equipCosmetic(p, m) {
+  const crest = m.crest || null, wake = m.wake || null;
+  p.crest = (crest && p.owned.has(crest) && COSMETIC_BY_ID[crest] && COSMETIC_BY_ID[crest].kind === 'crest') ? crest : null;
+  p.wake = (wake && p.owned.has(wake) && COSMETIC_BY_ID[wake] && COSMETIC_BY_ID[wake].kind === 'wake') ? wake : null;
+  db.setEquipped(p.userId, p.crest, p.wake).catch(() => {});
+  send(p, { type: 'progress', slag: p.slag, bestWave: p.bestWave, cosmetics: [...p.owned], crest: p.crest, wake: p.wake });
+}
 
 // ---- wave manager ----
 function alivePlayers(room) { return [...room.players].map((u) => players.get(u)).filter((p) => p && !p.dead); }
@@ -506,6 +574,7 @@ function simulate() {
       const p = players.get(uid); if (!p) continue;
       if (p.iframes > 0) p.iframes--;
       if (p.fireCd > 0) p.fireCd--;
+      if (p.nadeCd > 0) p.nadeCd--;
 
       // dash + movement are both in the shared physics now (predicted + reconciled)
       while (p.queue.length) { const inp = p.queue.shift(); if (!p.dead) Physics.step(p, inp, room.level); p.lastSeq = inp.seq; p.input = inp; }
@@ -528,6 +597,7 @@ function simulate() {
     // foes
     for (const f of [...room.foes]) stepFoe(room, f);
     stepQuakes(room);
+    stepNades(room);
     // foe contact damage
     for (const uid of room.players) { const p = players.get(uid); if (!p || p.dead || p.dashT > 0) continue;
       const core = { x: p.x + PW / 2 - CORE / 2, y: p.y + PH / 2 - CORE / 2, w: CORE, h: CORE };
@@ -580,7 +650,7 @@ function broadcastStates() {
     if (room.players.size === 0) continue;
     const list = Array.from(room.players, (uid) => { const p = players.get(uid); return p && {
       id: p.userId, name: p.username, color: p.color, x: Math.round(p.x), y: Math.round(p.y),
-      face: p.face, hp: p.hp, dead: p.dead, iframes: p.iframes, aimx: +p.aim.x.toFixed(2), aimy: +p.aim.y.toFixed(2) }; }).filter(Boolean);
+      face: p.face, hp: p.hp, dead: p.dead, iframes: p.iframes, aimx: +p.aim.x.toFixed(2), aimy: +p.aim.y.toFixed(2), crest: p.crest, wake: p.wake }; }).filter(Boolean);
     const foes = room.foes.map((f) => { const o = { id: f.id, kind: f.kind, boss: f.boss || null, x: Math.round(f.x), y: Math.round(f.y),
       w: f.w, h: f.h, hp: f.hp, maxHp: f.maxHp || 0, hit: f.hit || 0,
       t: f.t || 0, ph: f.phase || '', ch: f.charge || 0, vx: +(f.vx || 0).toFixed(2), vy: +(f.vy || 0).toFixed(2) };
@@ -597,9 +667,10 @@ function broadcastStates() {
     const pshots = room.pBullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), color: b.color, owner: b.owner,
       vx: +b.vx.toFixed(2), vy: +b.vy.toFixed(2) }));
     const quakes = room.quakes.map((q) => ({ x: Math.round(q.x), t: q.t }));
+    const nades = room.nades.map((g) => ({ x: Math.round(g.x), y: Math.round(g.y), fuse: g.fuse }));
     for (const uid of room.players) {
       const p = players.get(uid); if (!p || p.ws.readyState !== 1) continue;
-      p.ws.send(JSON.stringify({ type: 'state', players: list, foes, fshots, pshots, quakes, wave: room.wave,
+      p.ws.send(JSON.stringify({ type: 'state', players: list, foes, fshots, pshots, quakes, nades, wave: room.wave,
         you: { x: p.x, y: p.y, vx: p.vx, vy: p.vy, onGround: p.onGround, coyote: p.coyote, jumps: p.jumps,
           face: p.face, dropThru: p.dropThru, buffer: p.buffer, pjump: p.pjump, hp: p.hp, maxHp: p.maxHp, dead: p.dead,
           dashT: p.dashT, dashCd: p.dashCd, dashX: p.dashX, dashY: p.dashY, score: p.score, lastSeq: p.lastSeq } }));

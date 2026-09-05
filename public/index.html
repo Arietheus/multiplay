@@ -56,6 +56,15 @@
   .pmgrid .cell.record b { color:var(--sulfur); }
   .pmgrid .cell span { font-size:10px; letter-spacing:1px; color:var(--dim); }
   .pmslag { text-align:center; color:var(--sulfur); font-size:15px; letter-spacing:1px; min-height:20px; }
+  .shopgrid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:6px; }
+  .cosmetic { background:var(--pit-lit); border:1px solid var(--stone-lit); border-radius:3px; padding:9px 10px; }
+  .cosmetic.on { border-color:var(--sulfur); }
+  .cosmetic .cn { font-size:13px; color:var(--bone); }
+  .cosmetic .cc { font-size:11px; color:var(--sulfur); margin:2px 0 7px; }
+  .cosmetic button { width:100%; padding:6px; border:none; border-radius:3px; background:var(--stone-lit); color:var(--bone); font-size:12px; }
+  .cosmetic button.buy { background:var(--sulfur); color:var(--pit); }
+  .cosmetic button.equipped { background:var(--mint); color:var(--pit); }
+  .cosmetic button:disabled { opacity:.5; }
   #topright { position:fixed; top:12px; right:14px; z-index:20; display:flex; gap:8px; }
   #topright button { padding:6px 12px; border-radius:3px; border:none; background:var(--stone); color:var(--bone); }
   #topright button:hover { background:var(--stone-lit); }
@@ -166,6 +175,15 @@
       <div id="pmstats" class="pmgrid"></div>
       <div id="pmslag" class="pmslag"></div>
       <button id="pmclose" class="primary small" style="margin-top:14px;">Back to the lobby</button>
+    </div>
+  </div>
+
+  <div id="shop" class="overlay hidden">
+    <div class="modal">
+      <h2>SHOP <button id="closeShop">×</button></h2>
+      <p class="sub">Slag: <span id="shopSlag" class="slag">0 ◆</span> · buy once, wear on any run.</p>
+      <h3>CRESTS</h3><div id="shopCrests" class="shopgrid"></div>
+      <h3>WAKES</h3><div id="shopWakes" class="shopgrid"></div>
     </div>
   </div>
 

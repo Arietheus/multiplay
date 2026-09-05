@@ -39,16 +39,22 @@ async function init() {
   // progression: slag (currency) + best wave reached
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slag INTEGER NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS best_wave INTEGER NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cosmetics TEXT NOT NULL DEFAULT '[]';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS crest TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS wake TEXT;`);
   console.log('Database ready.');
 }
 
-// Fetch a player's persisted progression (currency + best wave).
+function parseList(s) { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+
+// Fetch a player's persisted progression (currency, best wave, cosmetics).
 async function getProgress(userId) {
-  const r = await pool.query('SELECT slag, best_wave FROM users WHERE id = $1', [userId]);
-  return r.rows[0] ? { slag: r.rows[0].slag, bestWave: r.rows[0].best_wave } : { slag: 0, bestWave: 0 };
+  const r = await pool.query('SELECT slag, best_wave, cosmetics, crest, wake FROM users WHERE id = $1', [userId]);
+  const row = r.rows[0] || {};
+  return { slag: row.slag || 0, bestWave: row.best_wave || 0, cosmetics: parseList(row.cosmetics), crest: row.crest || null, wake: row.wake || null };
 }
 
-// Bank a finished run: add slag, raise best wave. Returns the new totals.
+// Bank a finished run: add slag, raise best wave. Returns new totals.
 async function bankRun(userId, addSlag, wave) {
   const r = await pool.query(
     `UPDATE users SET slag = slag + $2, best_wave = GREATEST(best_wave, $3)
@@ -57,4 +63,16 @@ async function bankRun(userId, addSlag, wave) {
   return r.rows[0] ? { slag: r.rows[0].slag, bestWave: r.rows[0].best_wave } : null;
 }
 
-module.exports = { pool, init, getProgress, bankRun };
+// Persist a purchase (new slag balance + owned list).
+async function saveCosmetics(userId, slag, owned) {
+  const r = await pool.query('UPDATE users SET slag = $2, cosmetics = $3 WHERE id = $1 RETURNING slag',
+    [userId, Math.max(0, slag | 0), JSON.stringify(owned)]);
+  return r.rows[0] ? r.rows[0].slag : slag;
+}
+
+// Persist equipped crest + wake.
+async function setEquipped(userId, crest, wake) {
+  await pool.query('UPDATE users SET crest = $2, wake = $3 WHERE id = $1', [userId, crest || null, wake || null]);
+}
+
+module.exports = { pool, init, getProgress, bankRun, saveCosmetics, setEquipped };
